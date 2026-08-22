@@ -42,13 +42,36 @@ enum NeteaseAPI {
         let message: String?
         let nickname: String?
         let avatarUrl: String?
+        let cookie: String?
     }
 
     /// Codes: 800 expired · 801 waiting · 802 scanned · 803 success.
-    /// On 803 the auth cookies arrive via Set-Cookie and are absorbed by the client.
+    /// On 803 NetEase can return auth cookies in the JSON body, Set-Cookie
+    /// headers, or both. iOS may also report a transient connection loss while
+    /// the server completes the login, so this idempotent check is retried.
     static func qrCheck(unikey: String) async throws -> QRCheckResponse {
-        let data = try await client.weapi("/login/qrcode/client/login", ["key": unikey, "type": 1])
-        return try JSONDecoder().decode(QRCheckResponse.self, from: data)
+        for attempt in 0..<3 {
+            do {
+                let data = try await client.weapi(
+                    "/login/qrcode/client/login",
+                    ["key": unikey, "type": 1]
+                )
+                let response = try JSONDecoder().decode(QRCheckResponse.self, from: data)
+                if response.code == 803, let cookie = response.cookie, !cookie.isEmpty {
+                    client.ingestCookieString(cookie)
+                }
+                return response
+            } catch {
+                guard attempt < 2, isTransientQRCodeError(error) else { throw error }
+                try await Task.sleep(for: .milliseconds(Int64(250 * (attempt + 1))))
+            }
+        }
+        preconditionFailure("QR check retry loop must return or throw")
+    }
+
+    private static func isTransientQRCodeError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        return urlError.code == .networkConnectionLost || urlError.code == .timedOut
     }
 
     static func logout() async {

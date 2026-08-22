@@ -67,6 +67,12 @@ final class NeteaseClient: @unchecked Sendable {
 
     /// Ingests a `;;`-joined raw cookie string as returned by the QR login check.
     func ingestCookieString(_ raw: String) {
+        setCookies(Self.parseCookieString(raw))
+    }
+
+    /// Parses NetEase's `;;`-joined Set-Cookie representation. Kept separate
+    /// from persistence so the QR-login response format can be unit tested.
+    static func parseCookieString(_ raw: String) -> [String: String] {
         var parsed: [String: String] = [:]
         for cookie in raw.components(separatedBy: ";;") {
             guard let pair = cookie.components(separatedBy: ";").first,
@@ -76,7 +82,7 @@ final class NeteaseClient: @unchecked Sendable {
             guard !name.isEmpty, !value.isEmpty else { continue }
             parsed[name] = value
         }
-        setCookies(parsed)
+        return parsed
     }
 
     func clearAuthCookies() {
@@ -103,7 +109,13 @@ final class NeteaseClient: @unchecked Sendable {
     }
 
     private func absorbSetCookies(from response: HTTPURLResponse, url: URL) {
-        guard let fields = response.allHeaderFields as? [String: String] else { return }
+        // `allHeaderFields` is `[AnyHashable: Any]`. A direct dictionary cast
+        // can fail on iOS even when every useful header is string-convertible.
+        var fields: [String: String] = [:]
+        for (key, value) in response.allHeaderFields {
+            guard let name = key as? String else { continue }
+            fields[name] = String(describing: value)
+        }
         let parsed = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
         guard !parsed.isEmpty else { return }
         var new: [String: String] = [:]

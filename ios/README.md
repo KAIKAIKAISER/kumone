@@ -58,6 +58,22 @@ KumoneIOS/
 
 ## Development Notes
 
+### Keeping the Fork Current
+
+The fork's `Sync upstream` GitHub Actions workflow merges
+`missuo/kumone:main` into the fork's `main` branch every day and can also be
+started manually from the Actions tab. If an upstream change conflicts with an
+iOS fix, the workflow stops without pushing so the conflict can be resolved in
+a normal pull request.
+
+For a local checkout, configure the upstream remote once:
+
+```bash
+git remote add upstream https://github.com/missuo/kumone.git
+git fetch upstream
+git merge upstream/main
+```
+
 ### Code Organization
 Most development happens in `KumoneIOSPackage/Sources/KumoneIOSFeature/` - organize your code as you prefer.
 
