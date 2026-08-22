@@ -66,6 +66,11 @@ started manually from the Actions tab. If an upstream change conflicts with an
 iOS fix, the workflow stops without pushing so the conflict can be resolved in
 a normal pull request.
 
+The `Sync upstream iOS release` workflow checks for a new upstream release
+every hour. For each new version it merges upstream `main`, rebuilds the fork's
+unsigned iOS IPA, and publishes the IPA under the matching tag in this fork's
+Releases page.
+
 For a local checkout, configure the upstream remote once:
 
 ```bash

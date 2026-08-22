@@ -1,0 +1,122 @@
+name: Sync upstream iOS release
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream release tag (leave blank for latest)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-ios-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM_REPOSITORY: missuo/kumone
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve upstream release
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            API_PATH="repos/$UPSTREAM_REPOSITORY/releases/tags/$REQUESTED_TAG"
+          else
+            API_PATH="repos/$UPSTREAM_REPOSITORY/releases/latest"
+          fi
+
+          TAG="$(gh api "$API_PATH" --jq .tag_name)"
+          VERSION="${TAG#v}"
+          TITLE="$(gh api "$API_PATH" --jq '.name // .tag_name')"
+          ASSET_NAME="Kumone-iOS-$VERSION-unsigned.ipa"
+
+          echo "api_path=$API_PATH" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Skip an already mirrored release
+        id: existing
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          ASSET_NAME: ${{ steps.release.outputs.asset_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '.assets[].name' 2>/dev/null | grep -Fxq "$ASSET_NAME"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream main
+        if: steps.existing.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/missuo/kumone.git
+          git fetch upstream main
+          git merge --no-edit upstream/main
+          git push origin HEAD:main
+
+      - name: Build unsigned iOS IPA
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          ASSET_NAME: ${{ steps.release.outputs.asset_name }}
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          xcodebuild -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ios-dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            build
+
+          APP="$RUNNER_TEMP/ios-dd/Build/Products/Release-iphoneos/KumoneIOS.app"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" dist
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+          ditto -c -k --keepParent "$RUNNER_TEMP/ipa/Payload" "dist/$ASSET_NAME"
+
+      - name: Publish mirrored release
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          API_PATH: ${{ steps.release.outputs.api_path }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          UPSTREAM_TITLE: ${{ steps.release.outputs.title }}
+          ASSET_NAME: ${{ steps.release.outputs.asset_name }}
+        run: |
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "Synced from [missuo/kumone $TAG](https://github.com/missuo/kumone/releases/tag/$TAG)."
+            echo
+            echo "This IPA is rebuilt from the fork's current main branch and includes the iOS QR-login and AppIcon fixes. It is unsigned and must be signed before installation."
+            echo
+            gh api "$API_PATH" --jq '.body // ""'
+          } > "$NOTES"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "dist/$ASSET_NAME" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "dist/$ASSET_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$(git rev-parse HEAD)" \
+              --title "$UPSTREAM_TITLE (iOS fork)" \
+              --notes-file "$NOTES"
+          fi
