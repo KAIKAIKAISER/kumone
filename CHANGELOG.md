@@ -6,6 +6,13 @@
 section the English bullets come first, followed by their Simplified Chinese
 counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单行。
 
+## 0.2.1 - 2026-08-22
+
+### Fixed / 修复
+
+- iOS audio stopped when the app left the foreground: `INFOPLIST_KEY_UIBackgroundModes` is not a real build setting and was silently ignored, so the built Info.plist had no background-audio declaration; it now comes from a partial Info.plist merged into the generated one
+- iOS 应用退到后台后音频停止的问题：`INFOPLIST_KEY_UIBackgroundModes` 并非有效构建设置、被静默忽略，构建产物缺少后台音频声明；现改由部分 Info.plist 与自动生成内容合并提供
+
 ## 0.2.0 - 2026-08-21
 
 ### Added / 新增
