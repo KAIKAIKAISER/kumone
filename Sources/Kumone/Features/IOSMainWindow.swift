@@ -132,7 +132,7 @@ struct IOSMiniPlayerBar: View {
         HStack(spacing: 10) {
             Button {
                 withAnimation(AppAnimation.smooth) {
-                    player.presentNowPlaying(showLyrics: true)
+                    player.presentNowPlaying()
                 }
             } label: {
                 HStack(spacing: 10) {
@@ -159,7 +159,7 @@ struct IOSMiniPlayerBar: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .buttonStyle(.plain)
-            .accessibilityLabel("打开歌词")
+            .accessibilityLabel("打开播放界面")
 
             Button {
                 player.togglePlayPause()

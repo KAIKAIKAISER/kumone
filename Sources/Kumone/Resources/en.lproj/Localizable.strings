@@ -241,6 +241,8 @@
 "设备音乐" = "On This Device";
 "本地音乐" = "Local Music";
 "打开歌词" = "Open Lyrics";
+"打开播放界面" = "Open Now Playing";
+"显示歌词" = "Show Lyrics";
 "读取本地音乐" = "Access Local Music";
 "允许 Kumone 读取设备音乐资料库，即可浏览和播放已下载的歌曲。" = "Allow Kumone to browse and play songs downloaded to this device.";
 "允许访问" = "Allow Access";

@@ -142,11 +142,21 @@ struct NowPlayingView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)
             } else {
-                VStack(spacing: 20) {
-                    artworkView(size: artworkDim)
-                    trackMetaView
-                    Spacer()
+                Button {
+                    withAnimation(AppAnimation.standard) {
+                        showLyricsOnMobile = true
+                    }
+                } label: {
+                    VStack(spacing: 20) {
+                        artworkView(size: artworkDim)
+                        trackMetaView
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("显示歌词")
                 .transition(.opacity)
             }
             VStack(spacing: 12) {
