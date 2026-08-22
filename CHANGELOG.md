@@ -8,6 +8,11 @@ counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单
 
 ## 0.2.1 - 2026-08-22
 
+### Added / 新增
+
+- Now Playing gains a like command: the hearted state syncs with the app and can be toggled from CarPlay / Control Center contexts
+- 系统 Now Playing 接入「喜欢」：红心状态与 App 内双向同步，可在 CarPlay / 控制中心相关场景切换
+
 ### Fixed / 修复
 
 - iOS audio stopped when the app left the foreground: `INFOPLIST_KEY_UIBackgroundModes` is not a real build setting and was silently ignored, so the built Info.plist had no background-audio declaration; it now comes from a partial Info.plist merged into the generated one
