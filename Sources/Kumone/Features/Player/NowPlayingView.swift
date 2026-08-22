@@ -13,6 +13,7 @@ struct NowPlayingView: View {
     @State private var isUserScrolling = false
     @State private var resumeTask: Task<Void, Never>?
     @State private var showLyricsOnMobile = false
+    @State private var selectedArtist: ArtistRef?
 
     var body: some View {
         GeometryReader { geo in
@@ -43,9 +44,7 @@ struct NowPlayingView: View {
             .overlay(alignment: .topTrailing) {
                 if isCompact {
                     Button {
-                        withAnimation(AppAnimation.standard) {
-                            showLyricsOnMobile.toggle()
-                        }
+                        setMobileLyricsVisible(!showLyricsOnMobile)
                     } label: {
                         Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
                             .font(.system(size: 14, weight: .semibold))
@@ -67,6 +66,27 @@ struct NowPlayingView: View {
         }
         .task(id: player.currentTrack?.id) {
             await loadArtwork()
+        }
+        .sheet(item: $selectedArtist) { artist in
+            NavigationStack {
+                ArtistDetailView(artistID: artist.id)
+                    .appDestinations()
+                    .toolbar {
+                        #if os(iOS)
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") {
+                                selectedArtist = nil
+                            }
+                        }
+                        #else
+                        ToolbarItem {
+                            Button("完成") {
+                                selectedArtist = nil
+                            }
+                        }
+                        #endif
+                    }
+            }
         }
         #if os(macOS)
         .onExitCommand {
@@ -141,21 +161,23 @@ struct NowPlayingView: View {
                 lyricsColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)
-            } else {
-                Button {
-                    withAnimation(AppAnimation.standard) {
-                        showLyricsOnMobile = true
-                    }
-                } label: {
-                    VStack(spacing: 20) {
-                        artworkView(size: artworkDim)
-                        trackMetaView
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            setMobileLyricsVisible(false)
+                        }
+                    )
+            } else {
+                VStack(spacing: 20) {
+                    artworkView(size: artworkDim)
+                    trackMetaView
+                    Spacer()
                 }
-                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    setMobileLyricsVisible(true)
+                }
                 .accessibilityLabel("显示歌词")
                 .transition(.opacity)
             }
@@ -205,12 +227,52 @@ struct NowPlayingView: View {
                     VIPBadge()
                 }
             }
-            Text("\(player.currentTrack?.artistNames ?? "") — \(player.currentTrack?.album.name ?? "")")
-                .font(.system(size: 13.5))
-                .foregroundStyle(.white.opacity(0.65))
-                .lineLimit(1)
+            HStack(spacing: 5) {
+                artistEntry
+                if let album = player.currentTrack?.album.name, !album.isEmpty {
+                    Text("— \(album)")
+                        .lineLimit(1)
+                }
+            }
+            .font(.system(size: 13.5))
+            .foregroundStyle(.white.opacity(0.65))
         }
         .frame(maxWidth: 400)
+    }
+
+    @ViewBuilder
+    private var artistEntry: some View {
+        let artists = player.currentTrack?.artists.filter { $0.id > 0 } ?? []
+        if artists.count == 1, let artist = artists.first {
+            Button(artist.name) {
+                selectedArtist = artist
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.8))
+            .accessibilityHint("查看歌手主页")
+        } else if artists.count > 1 {
+            Menu {
+                ForEach(artists) { artist in
+                    Button(artist.name) {
+                        selectedArtist = artist
+                    }
+                }
+            } label: {
+                Text(artists.map(\.name).joined(separator: " / "))
+                    .lineLimit(1)
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+        } else {
+            Text(player.currentTrack?.artistNames ?? "")
+                .lineLimit(1)
+        }
+    }
+
+    private func setMobileLyricsVisible(_ visible: Bool) {
+        withAnimation(AppAnimation.standard) {
+            showLyricsOnMobile = visible
+            player.mobileNowPlayingShowsLyrics = visible
+        }
     }
 
     private func leftColumn(artworkSize: CGFloat) -> some View {

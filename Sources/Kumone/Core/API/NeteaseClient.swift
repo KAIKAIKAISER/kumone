@@ -127,6 +127,21 @@ final class NeteaseClient: @unchecked Sendable {
 
     // MARK: - Requests
 
+    /// POST to a public `/api` endpoint that does not require weapi/eapi encryption.
+    func api(_ path: String, _ payload: [String: Any] = [:]) async throws -> Data {
+        guard let url = URL(string: "https://music.163.com/api\(path)") else {
+            throw NeteaseAPIError.http(-1)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(cookieHeader(extra: ["os": "pc", "appver": "3.1.17"]), forHTTPHeaderField: "Cookie")
+        request.httpBody = Self.encodeForm(payload.mapValues { String(describing: $0) })
+        return try await perform(request)
+    }
+
     /// POST to `https://music.163.com/weapi<path>` with weapi encryption.
     func weapi(_ path: String, _ payload: [String: Any] = [:]) async throws -> Data {
         var body = payload

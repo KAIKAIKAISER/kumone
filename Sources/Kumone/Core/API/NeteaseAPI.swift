@@ -4,6 +4,13 @@ import Foundation
 enum NeteaseAPI {
     private static var client: NeteaseClient { .shared }
 
+    private static func api<T: Decodable>(
+        _ type: T.Type, _ path: String, _ payload: [String: Any] = [:]
+    ) async throws -> T {
+        let data = try await client.api(path, payload)
+        return try client.decoded(T.self, from: data)
+    }
+
     private static func weapi<T: Decodable>(
         _ type: T.Type, _ path: String, _ payload: [String: Any] = [:]
     ) async throws -> T {
@@ -428,6 +435,33 @@ enum NeteaseAPI {
 
     static func artist(id: Int) async throws -> ArtistResponse {
         try await weapi(ArtistResponse.self, "/v1/artist/\(id)")
+    }
+
+    struct ArtistSongsResponse: Decodable {
+        let songs: [Track]
+        let more: Bool?
+        let total: Int?
+    }
+
+    static func artistSongs(id: Int, limit: Int = 100, offset: Int = 0) async throws -> ArtistSongsResponse {
+        try await api(ArtistSongsResponse.self, "/v1/artist/songs",
+                      ["id": id, "private_cloud": "true", "work_type": 1,
+                       "order": "hot", "limit": limit, "offset": offset])
+    }
+
+    static func artistCreatedPlaylists(name: String, limit: Int = 100) async throws -> [PlaylistSummary] {
+        let result = try await search(name, type: .playlists, limit: limit)
+        return playlistsCreated(by: name, from: result.playlists ?? [])
+    }
+
+    static func playlistsCreated(by artistName: String,
+                                 from playlists: [PlaylistSummary]) -> [PlaylistSummary] {
+        let expected = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return playlists.filter { playlist in
+            guard let creator = playlist.creator else { return false }
+            return creator.nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare(expected) == .orderedSame
+        }
     }
 
     struct ArtistAlbumsResponse: Decodable {

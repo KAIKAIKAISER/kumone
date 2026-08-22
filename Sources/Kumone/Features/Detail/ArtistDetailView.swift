@@ -4,7 +4,8 @@ struct ArtistDetailView: View {
     let artistID: Int
 
     @State private var artist: ArtistSummary?
-    @State private var hotSongs: [Track] = []
+    @State private var songs: [Track] = []
+    @State private var createdPlaylists: [PlaylistSummary] = []
     @State private var albums: [AlbumSummary] = []
     @State private var epsAndSingles: [AlbumSummary] = []
     @State private var similar: [ArtistSummary] = []
@@ -38,16 +39,39 @@ struct ArtistDetailView: View {
                             .padding(.top, 16)
                     }
 
-                    if !hotSongs.isEmpty {
-                        SectionHeader(title: "热门单曲")
+                    if !songs.isEmpty {
+                        SectionHeader(title: "歌曲")
                             .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
 
                         TrackListView(
-                            tracks: hotSongs,
+                            tracks: songs,
                             style: .compact,
                             source: .artist(artistID)
                         )
                         .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+                    }
+
+                    if !createdPlaylists.isEmpty {
+                        SectionHeader(title: "创建的歌单")
+                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 16) {
+                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                                ForEach(createdPlaylists) { playlist in
+                                    NavigationLink(value: Destination.playlist(playlist.id)) {
+                                        CoverCardBody(
+                                            coverURL: playlist.coverURL?.resizedImageURL(384),
+                                            title: playlist.name,
+                                            subtitle: "\(playlist.trackCount) 首",
+                                            playCount: playlist.playCount
+                                        )
+                                    }
+                                    .buttonStyle(.interactiveCard)
+                                }
+                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            }
+                        }
                     }
 
                     if !albums.isEmpty {
@@ -133,14 +157,22 @@ struct ArtistDetailView: View {
         do {
             let response = try await NeteaseAPI.artist(id: artistID)
             artist = response.artist
-            hotSongs = response.hotSongs
+            songs = response.hotSongs
             isFollowed = response.artist.followed
             isLoading = false
 
-            if let result = try? await NeteaseAPI.artistAlbums(id: artistID, limit: 60) {
+            async let songsResult = try? NeteaseAPI.artistSongs(id: artistID, limit: 100)
+            async let albumsResult = try? NeteaseAPI.artistAlbums(id: artistID, limit: 60)
+            async let playlistsResult = try? NeteaseAPI.artistCreatedPlaylists(name: response.artist.name)
+
+            if let loadedSongs = await songsResult?.songs, !loadedSongs.isEmpty {
+                songs = loadedSongs
+            }
+            if let result = await albumsResult {
                 albums = result.hotAlbums.filter { $0.size > 1 }
                 epsAndSingles = result.hotAlbums.filter { $0.size <= 1 }
             }
+            createdPlaylists = await playlistsResult ?? []
             if account.isLoggedIn {
                 similar = (try? await NeteaseAPI.similarArtists(id: artistID)) ?? []
             }
@@ -179,11 +211,11 @@ struct ArtistDetailView: View {
             // Compact Action Bar
             HStack(spacing: 10) {
                 Button {
-                    player.play(tracks: hotSongs, source: .artist(artistID))
+                    player.play(tracks: songs, source: .artist(artistID))
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
-                        Text("播放热门")
+                        Text("播放歌曲")
                     }
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
@@ -239,9 +271,9 @@ struct ArtistDetailView: View {
 
                 HStack(spacing: 10) {
                     Button {
-                        player.play(tracks: hotSongs, source: .artist(artistID))
+                        player.play(tracks: songs, source: .artist(artistID))
                     } label: {
-                        Label("播放热门", systemImage: "play.fill")
+                        Label("播放歌曲", systemImage: "play.fill")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18)
