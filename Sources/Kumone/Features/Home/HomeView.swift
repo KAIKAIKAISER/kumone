@@ -34,9 +34,10 @@ final class HomeViewModel {
     var newAlbums: [AlbumSummary] = []
     var topArtists: [ArtistSummary] = []
     var dailyFirstCover: String?
+    private var loadedForLoginState: Bool?
 
     func load(loggedIn: Bool) async {
-        if case .loaded = state { return }
+        if case .loaded = state, loadedForLoginState == loggedIn { return }
         state = .loading
 
         async let playlistsTask = fetchRecommendPlaylists(loggedIn: loggedIn)
@@ -60,7 +61,12 @@ final class HomeViewModel {
             await loadRadarPlaylists()
         }
 
-        state = playlists.isEmpty && newAlbums.isEmpty ? .error(String(localized: "网络连接失败")) : .loaded
+        if playlists.isEmpty && newAlbums.isEmpty {
+            state = .error(String(localized: "网络连接失败"))
+        } else {
+            loadedForLoginState = loggedIn
+            state = .loaded
+        }
     }
 
     func reload(loggedIn: Bool) async {
@@ -109,6 +115,15 @@ struct HomeView: View {
     @Environment(PlayerService.self) private var player
     @State private var model = HomeViewModel.shared
 
+    private struct LoadContext: Equatable {
+        let accountBootstrapped: Bool
+        let loggedIn: Bool
+    }
+
+    private var loadContext: LoadContext {
+        LoadContext(accountBootstrapped: account.isBootstrapped, loggedIn: account.isLoggedIn)
+    }
+
     var body: some View {
         ScrollView {
             switch model.state {
@@ -124,8 +139,9 @@ struct HomeView: View {
             }
         }
         .navigationTitle("推荐")
-        .task(id: account.isLoggedIn) {
-            await model.load(loggedIn: account.isLoggedIn)
+        .task(id: loadContext) {
+            guard loadContext.accountBootstrapped else { return }
+            await model.load(loggedIn: loadContext.loggedIn)
         }
     }
 

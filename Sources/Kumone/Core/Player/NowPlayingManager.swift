@@ -1,6 +1,27 @@
 import Foundation
 import MediaPlayer
 
+struct LockScreenLyricMetadata: Equatable {
+    let lineID: Int
+    let lyric: String
+    let songAndArtist: String
+}
+
+enum LockScreenLyricsFormatter {
+    static func metadata(for track: Track, lyrics: ParsedLyrics,
+                         elapsed: TimeInterval) -> LockScreenLyricMetadata? {
+        guard let index = lyrics.activeIndex(at: elapsed + 0.2) else { return nil }
+        let line = lyrics.lines[index]
+        let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return LockScreenLyricMetadata(
+            lineID: line.id,
+            lyric: text,
+            songAndArtist: "\(track.name) — \(track.artistNames)"
+        )
+    }
+}
+
 /// System Now Playing integration: media keys, Control Center, lock-screen metadata.
 @MainActor
 final class NowPlayingManager {
@@ -9,6 +30,8 @@ final class NowPlayingManager {
     private weak var player: PlayerService?
     private var artworkTask: Task<Void, Never>?
     private var info: [String: Any] = [:]
+    private var metadataTrackID: Int?
+    private var lastLockScreenLyricLineID: Int?
 
     private init() {}
 
@@ -74,6 +97,8 @@ final class NowPlayingManager {
     }
 
     func updateMetadata(for track: Track, duration: TimeInterval) {
+        metadataTrackID = track.id
+        lastLockScreenLyricLineID = nil
         info = [
             MPMediaItemPropertyTitle: track.name,
             MPMediaItemPropertyArtist: track.artistNames,
@@ -100,7 +125,28 @@ final class NowPlayingManager {
     func updateElapsed(_ elapsed: TimeInterval, rate: Double) {
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
         info[MPNowPlayingInfoPropertyPlaybackRate] = rate
+        updateLockScreenLyrics(at: elapsed)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = rate > 0 ? .playing : .paused
+    }
+
+    private func updateLockScreenLyrics(at elapsed: TimeInterval) {
+        #if os(iOS)
+        guard let track = player?.currentTrack,
+              metadataTrackID == track.id,
+              let lyrics = player?.lyrics,
+              let metadata = LockScreenLyricsFormatter.metadata(
+                  for: track, lyrics: lyrics, elapsed: elapsed
+              ),
+              metadata.lineID != lastLockScreenLyricLineID else { return }
+
+        lastLockScreenLyricLineID = metadata.lineID
+        info[MPMediaItemPropertyTitle] = metadata.lyric
+        info[MPMediaItemPropertyArtist] = metadata.songAndArtist
+        info[MPMediaItemPropertyLyrics] = lyrics.lines
+            .map(\.text)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        #endif
     }
 }
