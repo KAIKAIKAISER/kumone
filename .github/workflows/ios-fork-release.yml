@@ -1,0 +1,77 @@
+name: Publish iOS fork release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Fork release tag (for example v0.2.2-ios.2)"
+        required: true
+        type: string
+      marketing_version:
+        description: "CFBundleShortVersionString"
+        required: true
+        default: "0.2.2"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-ios-fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      VERSION: ${{ inputs.marketing_version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Test core package
+        run: swift test
+
+      - name: Build unsigned iOS IPA
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SAFE_TAG="${RELEASE_TAG#v}"
+          ASSET_NAME="Kumone-iOS-$SAFE_TAG-unsigned.ipa"
+
+          xcodebuild -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ios-dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            build
+
+          APP="$RUNNER_TEMP/ios-dd/Build/Products/Release-iphoneos/KumoneIOS.app"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" dist
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+          ditto -c -k --keepParent "$RUNNER_TEMP/ipa/Payload" "dist/$ASSET_NAME"
+          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+
+      - name: Publish fork release
+        run: |
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "Unsigned iOS build from commit \`$(git rev-parse --short HEAD)\`."
+            echo
+            echo "Includes synced lock-screen lyrics, local music-library playback, direct lyrics access from the mini player, QR-login fixes, and the corrected AppIcon."
+            echo
+            echo "The IPA must be signed before installation."
+          } > "$NOTES"
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "dist/$ASSET_NAME" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" "dist/$ASSET_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$(git rev-parse HEAD)" \
+              --title "Kumone $RELEASE_TAG (iOS fork)" \
+              --notes-file "$NOTES"
+          fi
