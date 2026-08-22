@@ -21,6 +21,7 @@ enum PlaySource: Equatable {
     case artist(Int)
     case daily
     case cloud
+    case localLibrary
     case none
 
     var sourceID: Int {
@@ -74,6 +75,7 @@ final class PlayerService {
     private(set) var lyrics: ParsedLyrics?
     var activePanel: RightPanel?
     var showNowPlaying = false
+    var mobileNowPlayingShowsLyrics = false
 
     /// The list the player is walking through (shuffled or ordered).
     var activeQueue: [Track] { shuffleEnabled ? shuffledQueue : queue }
@@ -85,6 +87,11 @@ final class PlayerService {
     }
 
     var hasCurrentTrack: Bool { currentTrack != nil }
+
+    func presentNowPlaying(showLyrics: Bool = false) {
+        mobileNowPlayingShowsLyrics = showLyrics
+        showNowPlaying = true
+    }
 
     // MARK: - Engine
 
@@ -391,6 +398,17 @@ final class PlayerService {
     }
 
     private func resolveAndLoad(_ track: Track, generation: Int) async {
+        if track.isLocal {
+            guard generation == resolveGeneration else { return }
+            guard let url = track.localAssetURL else {
+                handleUnplayableLocalTrack(track)
+                return
+            }
+            consecutiveFailures = 0
+            installPlayerItem(url: url, track: track, resolvedDuration: track.duration)
+            return
+        }
+
         let quality = SettingsManager.shared.audioQuality.rawValue
         var data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality).first
         if data?.url == nil, quality != AudioQuality.standard.rawValue {
@@ -436,6 +454,14 @@ final class PlayerService {
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
 
+        installPlayerItem(
+            url: url,
+            track: track,
+            resolvedDuration: data?.time.flatMap { $0 > 0 ? TimeInterval($0) / 1000 : nil }
+        )
+    }
+
+    private func installPlayerItem(url: URL, track: Track, resolvedDuration: TimeInterval?) {
         let item = AVPlayerItem(url: url)
         if let old = endObserver {
             NotificationCenter.default.removeObserver(old)
@@ -451,13 +477,28 @@ final class PlayerService {
         engine.play()
         isPlaying = true
 
-        if let time = data?.time, time > 0 {
-            duration = TimeInterval(time) / 1000
+        if let resolvedDuration, resolvedDuration > 0 {
+            duration = resolvedDuration
             NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
         }
     }
 
+    private func handleUnplayableLocalTrack(_ track: Track) {
+        consecutiveFailures += 1
+        ToastCenter.shared.show(String(localized: "《\(track.name)》无法从本地音乐资料库播放"))
+        if consecutiveFailures < 5 {
+            advanceToNext(userInitiated: false)
+        } else {
+            isPlaying = false
+        }
+    }
+
     private func loadLyrics(for track: Track, generation: Int) async {
+        if track.isLocal {
+            guard generation == resolveGeneration else { return }
+            lyrics = ParsedLyrics()
+            return
+        }
         let response = try? await NeteaseAPI.lyric(id: track.id)
         guard generation == resolveGeneration else { return }
         lyrics = response.map(LyricsParser.parse)
@@ -466,7 +507,7 @@ final class PlayerService {
     // MARK: - Scrobble
 
     private func scrobbleIfNeeded(completed: Bool) {
-        guard let track = currentTrack, !scrobbled, progress > 1 else { return }
+        guard let track = currentTrack, !track.isLocal, !scrobbled, progress > 1 else { return }
         scrobbled = true
         let seconds = completed ? Int(duration) : Int(progress)
         let sourceID = source.sourceID

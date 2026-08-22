@@ -127,63 +127,68 @@ enum IOSTab: Hashable {
 
 struct IOSMiniPlayerBar: View {
     @Environment(PlayerService.self) private var player
-    @Environment(AccountStore.self) private var account
 
     var body: some View {
-        Button {
-            withAnimation(AppAnimation.smooth) {
-                player.showNowPlaying = true
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(AppAnimation.smooth) {
+                    player.presentNowPlaying(showLyrics: true)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    CachedAsyncImage(url: player.currentTrack?.album.picUrl?.resizedImageURL(128))
+                        .frame(width: 42, height: 42)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+                        .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(player.currentTrack?.name ?? "")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text(player.currentTrack?.artistNames ?? "")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-        } label: {
-            HStack(spacing: 10) {
-                CachedAsyncImage(url: player.currentTrack?.album.picUrl?.resizedImageURL(128))
-                    .frame(width: 42, height: 42)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-                    .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+            .accessibilityLabel("打开歌词")
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(player.currentTrack?.name ?? "")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(player.currentTrack?.artistNames ?? "")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-
-                Button {
-                    player.togglePlayPause()
-                } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 34, height: 34)
-                }
-                .buttonStyle(.pressable)
-
-                Button {
-                    player.next()
-                } label: {
-                    Image(systemName: "forward.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 34, height: 34)
-                }
-                .buttonStyle(.pressable)
+            Button {
+                player.togglePlayPause()
+            } label: {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 34, height: 34)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+            .buttonStyle(.pressable)
+
+            Button {
+                player.next()
+            } label: {
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.pressable)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
     }
 }
 
@@ -241,6 +246,14 @@ struct IOSLibraryView: View {
                         }
                         .padding(.vertical, 6)
                     }
+                }
+            }
+
+            Section("设备音乐") {
+                NavigationLink {
+                    LocalMusicLibraryView()
+                } label: {
+                    Label("本地音乐", systemImage: "music.note.house.fill")
                 }
             }
 

@@ -54,10 +54,15 @@ struct Track: Codable, Hashable, Identifiable {
     let isCloud: Bool
     /// Some endpoints (cloudsearch, FM) embed the privilege in the track itself.
     let embeddedPrivilege: TrackPrivilege?
+    /// A playable URL supplied by the iOS media library. `nil` for NetEase tracks.
+    let localAssetURL: URL?
+    /// The stable media-library identifier. `nil` for NetEase tracks.
+    let localPersistentID: UInt64?
 
     var artistNames: String { artists.map(\.name).joined(separator: " / ") }
     var duration: TimeInterval { TimeInterval(durationMS) / 1000 }
     var subtitle: String? { transNames.first ?? alias.first }
+    var isLocal: Bool { localPersistentID != nil }
 
     private enum CodingKeys: String, CodingKey {
         case id, name
@@ -66,6 +71,7 @@ struct Track: Codable, Hashable, Identifiable {
         case dt, duration
         case alia, alias
         case tns, fee, mv, no, cd, noCopyrightRcmd, pc, privilege
+        case localAssetURL, localPersistentID
     }
 
     init(from decoder: Decoder) throws {
@@ -90,6 +96,8 @@ struct Track: Codable, Hashable, Identifiable {
             && (try? c.decodeNil(forKey: .noCopyrightRcmd)) == false
         isCloud = c.contains(.pc) && (try? c.decodeNil(forKey: .pc)) == false
         embeddedPrivilege = try? c.decode(TrackPrivilege.self, forKey: .privilege)
+        localAssetURL = try? c.decode(URL.self, forKey: .localAssetURL)
+        localPersistentID = try? c.decode(UInt64.self, forKey: .localPersistentID)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -105,6 +113,8 @@ struct Track: Codable, Hashable, Identifiable {
         try c.encode(mvID, forKey: .mv)
         try c.encode(trackNo, forKey: .no)
         try c.encodeIfPresent(disc, forKey: .cd)
+        try c.encodeIfPresent(localAssetURL, forKey: .localAssetURL)
+        try c.encodeIfPresent(localPersistentID, forKey: .localPersistentID)
     }
 }
 
@@ -137,6 +147,33 @@ enum TrackPlayability: Hashable {
 }
 
 extension Track {
+    init(localPersistentID: UInt64, name: String, artist: String, album: String,
+         duration: TimeInterval, assetURL: URL, trackNo: Int = 0, disc: String? = nil) {
+        id = Self.localTrackID(for: localPersistentID)
+        self.name = name
+        artists = [ArtistRef(id: 0, name: artist)]
+        self.album = AlbumRef(id: 0, name: album, picUrl: nil)
+        let safeDuration = duration.isFinite ? max(0, duration) : 0
+        durationMS = Int(safeDuration * 1000)
+        alias = []
+        transNames = []
+        fee = 0
+        mvID = 0
+        self.trackNo = trackNo
+        self.disc = disc
+        noCopyright = false
+        isCloud = false
+        embeddedPrivilege = nil
+        localAssetURL = assetURL
+        self.localPersistentID = localPersistentID
+    }
+
+    /// Keeps local-library tracks in a separate (negative) ID namespace.
+    static func localTrackID(for persistentID: UInt64) -> Int {
+        let magnitude = Int(persistentID % UInt64(Int.max))
+        return -(magnitude == 0 ? 1 : magnitude)
+    }
+
     /// Mirrors YesPlayMusic's `isTrackPlayable` decision chain,
     /// with the VIP check widened to cover 黑胶 SVIP (vipType 110 etc).
     func playability(privilege: TrackPrivilege?, isLoggedIn: Bool, vipType: Int) -> TrackPlayability {

@@ -60,6 +60,11 @@ struct NowPlayingView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            #if os(iOS)
+            showLyricsOnMobile = player.mobileNowPlayingShowsLyrics
+            #endif
+        }
         .task(id: player.currentTrack?.id) {
             await loadArtwork()
         }
@@ -218,7 +223,7 @@ struct NowPlayingView: View {
 
     private var controls: some View {
         HStack(spacing: 22) {
-            if let track = player.currentTrack {
+            if let track = player.currentTrack, !track.isLocal {
                 let liked = account.isLiked(track.id)
                 circleButton(
                     icon: liked ? "heart.fill" : "heart",
@@ -353,11 +358,21 @@ struct NowPlayingView: View {
                     .foregroundStyle(.white.opacity(0.6))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
+        } else if player.lyrics == nil {
             ProgressView()
                 .controlSize(.small)
                 .tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "quote.bubble")
+                    .font(.system(size: 32, weight: .light))
+                    .foregroundStyle(.white.opacity(0.4))
+                Text("暂无歌词")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

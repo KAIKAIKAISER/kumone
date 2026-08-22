@@ -235,6 +235,27 @@
 "VIP 歌曲，当前为试听片段" = "VIP song — playing a trial clip";
 "酷我音乐" = "Kuwo Music";
 "酷狗音乐" = "Kugou Music";
+"《%@》无法从本地音乐资料库播放" = "“%@” can’t be played from the local music library";
+
+/* Local music library */
+"设备音乐" = "On This Device";
+"本地音乐" = "Local Music";
+"打开歌词" = "Open Lyrics";
+"读取本地音乐" = "Access Local Music";
+"允许 Kumone 读取设备音乐资料库，即可浏览和播放已下载的歌曲。" = "Allow Kumone to browse and play songs downloaded to this device.";
+"允许访问" = "Allow Access";
+"无法访问音乐资料库" = "Music Library Unavailable";
+"请在系统设置中允许 Kumone 访问“媒体与 Apple Music”。" = "Allow Kumone to access Media & Apple Music in Settings.";
+"打开系统设置" = "Open Settings";
+"未知歌曲" = "Unknown Song";
+"未知歌手" = "Unknown Artist";
+"未知专辑" = "Unknown Album";
+"没有可播放的本地音乐" = "No Playable Local Music";
+"未找到本地音乐" = "No Local Music Found";
+"请先用“音乐”App 将歌曲下载到这台设备。" = "Download songs to this device with the Music app first.";
+"请尝试其他歌曲名、歌手或专辑名。" = "Try another song, artist, or album name.";
+"搜索歌曲、歌手或专辑" = "Search songs, artists, or albums";
+"刷新本地音乐" = "Refresh Local Music";
 
 /* Track playability */
 "VIP 专属" = "VIP Only";
