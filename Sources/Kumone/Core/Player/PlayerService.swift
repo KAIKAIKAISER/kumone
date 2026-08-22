@@ -454,11 +454,13 @@ final class PlayerService {
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
 
-        installPlayerItem(
-            url: url,
-            track: track,
-            resolvedDuration: data?.time.flatMap { $0 > 0 ? TimeInterval($0) / 1000 : nil }
-        )
+        let resolvedDuration: TimeInterval?
+        if let time = data?.time, time > 0 {
+            resolvedDuration = TimeInterval(time) / 1000
+        } else {
+            resolvedDuration = nil
+        }
+        installPlayerItem(url: url, track: track, resolvedDuration: resolvedDuration)
     }
 
     private func installPlayerItem(url: URL, track: Track, resolvedDuration: TimeInterval?) {
