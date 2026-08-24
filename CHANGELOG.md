@@ -6,6 +6,13 @@
 section the English bullets come first, followed by their Simplified Chinese
 counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单行。
 
+## 0.2.4 - 2026-08-23
+
+### Improved / 改进
+
+- The iOS deployment target is lowered from 18.0 to 17.0 (iPhone XS and later); iOS 18-only APIs now have iOS 17 fallbacks. iOS 16 is not feasible — the app's state layer is built on the Observation framework, which requires iOS 17
+- iOS 最低系统要求从 18.0 降至 17.0（iPhone XS 及之后机型均可安装）；iOS 18 专属 API 已补 iOS 17 回退。iOS 16 不可行 —— 应用状态层基于 Observation 框架，其最低要求即 iOS 17
+
 ## 0.2.3 - 2026-08-22
 
 ### Fixed / 修复
