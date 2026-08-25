@@ -6,6 +6,13 @@
 section the English bullets come first, followed by their Simplified Chinese
 counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单行。
 
+## 0.2.8 - 2026-08-25
+
+### Added / 新增
+
+- AirPlay: the now-playing page (and the macOS player bar) gain a system route picker for sending audio to AirPlay / Bluetooth devices; playback is audio-only, so it routes sound instead of mirroring the screen (#20)
+- AirPlay：播放页（及 macOS 播放条）新增系统输出设备选择器，可将音频投送到 AirPlay / 蓝牙设备；由于是纯音频播放，只路由声音而非镜像屏幕（#20）
+
 ## 0.2.7 - 2026-08-25
 
 ### Added / 新增

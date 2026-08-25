@@ -182,6 +182,10 @@ struct PlayerBar: View {
                 player.activePanel = player.activePanel == .queue ? nil : .queue
             }
             .help("播放队列")
+            #if os(macOS)
+            RoutePickerButton(diameter: 26, glyphSize: 13,
+                              tint: .secondary, background: .clear)
+            #endif
             VolumeControl()
         }
     }

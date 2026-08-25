@@ -349,6 +349,8 @@ struct NowPlayingView: View {
                 player.next()
             }
 
+            RoutePickerButton(diameter: 40, glyphSize: 15)
+
             if player.isFMMode {
                 Image(systemName: "wave.3.right.circle.fill")
                     .font(.system(size: 15))

@@ -122,6 +122,10 @@ No third-party API server involved: weapi (double AES-CBC + RSA) and eapi
 (AES-ECB + MD5 digest) encryption are implemented natively in Swift, and
 requests go straight to `music.163.com` / `interface.music.163.com`.
 
+## Related projects
+
+Want a **tvOS** build? Check out [Sonimbus](https://github.com/gee1k/sonimbus), a NetEase Cloud Music client for Apple TV maintained by my friend Svend.
+
 ## Credits
 
 Kumone is written from scratch in Swift. No code was copied from the projects
