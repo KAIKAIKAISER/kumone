@@ -76,7 +76,7 @@ enum UnblockService {
     private static func kuwo(_ track: Track) async -> URL? {
         let query = keyword(for: track)
             .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let searchURL = "http://search.kuwo.cn/r.s?&correct=1&vipver=1&stype=comprehensive&encoding=utf8"
+        let searchURL = "https://search.kuwo.cn/r.s?&correct=1&vipver=1&stype=comprehensive&encoding=utf8"
             + "&rformat=json&mobi=1&show_copyright_off=1&searchapi=6&all=\(query)"
         guard let data = await get(searchURL),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -98,7 +98,7 @@ enum UnblockService {
         guard let match = selectMatch(songs, durationMS: track.durationMS, duration: \.durationMS)
         else { return nil }
 
-        let convertURL = "http://antiserver.kuwo.cn/anti.s?type=convert_url&format=mp3&response=url&rid=MUSIC_\(match.rid)"
+        let convertURL = "https://antiserver.kuwo.cn/anti.s?type=convert_url&format=mp3&response=url&rid=MUSIC_\(match.rid)"
         guard let body = await get(convertURL, userAgent: "okhttp/3.10.0"),
               let text = String(data: body, encoding: .utf8),
               let range = text.range(of: #"http[^\s$"]+"#, options: .regularExpression),
@@ -135,7 +135,7 @@ enum UnblockService {
 
         let key = Insecure.MD5.hash(data: Data("\(match.hash)kgcloudv2".utf8))
             .map { String(format: "%02x", $0) }.joined()
-        let trackURL = "http://trackercdn.kugou.com/i/v2/?key=\(key)&hash=\(match.hash)"
+        let trackURL = "https://trackercdn.kugou.com/i/v2/?key=\(key)&hash=\(match.hash)"
             + "&appid=1005&pid=2&cmd=25&behavior=play&album_id=\(match.albumID)"
         guard let body = await get(trackURL),
               let obj2 = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
