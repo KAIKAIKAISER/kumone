@@ -1,18 +1,17 @@
 #if os(iOS)
+import Combine
 import MediaPlayer
-import Observation
 import SwiftUI
 import UIKit
 
 @MainActor
-@Observable
-final class LocalMusicLibrary {
+final class LocalMusicLibrary: ObservableObject {
     static let shared = LocalMusicLibrary()
 
-    private(set) var authorizationStatus = MPMediaLibrary.authorizationStatus()
-    private(set) var tracks: [Track] = []
-    private(set) var unavailableTrackCount = 0
-    private(set) var isLoading = false
+    @Published private(set) var authorizationStatus = MPMediaLibrary.authorizationStatus()
+    @Published private(set) var tracks: [Track] = []
+    @Published private(set) var unavailableTrackCount = 0
+    @Published private(set) var isLoading = false
 
     private init() {}
 
@@ -65,7 +64,7 @@ final class LocalMusicLibrary {
 }
 
 struct LocalMusicLibraryView: View {
-    @State private var library = LocalMusicLibrary.shared
+    @StateObject private var library = LocalMusicLibrary.shared
     @EnvironmentObject private var player: PlayerService
     @Environment(\.scenePhase) private var scenePhase
     @State private var searchText = ""
