@@ -66,7 +66,7 @@ final class LocalMusicLibrary {
 
 struct LocalMusicLibraryView: View {
     @State private var library = LocalMusicLibrary.shared
-    @Environment(PlayerService.self) private var player
+    @EnvironmentObject private var player: PlayerService
     @Environment(\.scenePhase) private var scenePhase
     @State private var searchText = ""
 

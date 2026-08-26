@@ -4,6 +4,8 @@
 <dict>
     <key>NSAppleMusicUsageDescription</key>
     <string>用于读取并播放设备音乐资料库中的本地歌曲。</string>
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
     <key>UIBackgroundModes</key>
     <array>
         <string>audio</string>
