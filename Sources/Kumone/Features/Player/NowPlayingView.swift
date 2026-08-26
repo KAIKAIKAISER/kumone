@@ -55,39 +55,25 @@ struct NowPlayingView: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                if playerPlaylistID != nil || (isCompact && showsClassicChrome(isCompact: isCompact)) {
-                    HStack(spacing: 10) {
-                        if playerPlaylistID != nil {
-                            Button {
-                                showPlaylist = true
-                            } label: {
-                                Image(systemName: "music.note.list")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.88))
-                                    .frame(width: 36, height: 36)
-                                    .background(.white.opacity(0.12), in: Circle())
-                            }
-                            .buttonStyle(.pressable)
-                            .accessibilityLabel("返回歌单")
-                        }
+                HStack(spacing: 10) {
+                    playlistReturnButton
 
-                        if isCompact, showsClassicChrome(isCompact: isCompact) {
-                            Button {
-                                setMobileLyricsVisible(!showLyricsOnMobile)
-                            } label: {
-                                Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
-                                    .frame(width: 36, height: 36)
-                                    .background(.white.opacity(0.12), in: Circle())
-                            }
-                            .buttonStyle(.pressable)
-                            .accessibilityLabel(showLyricsOnMobile ? "显示封面" : "显示歌词")
+                    if isCompact, showsClassicChrome(isCompact: isCompact) {
+                        Button {
+                            setMobileLyricsVisible(!showLyricsOnMobile)
+                        } label: {
+                            Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
+                                .frame(width: 36, height: 36)
+                                .background(.white.opacity(0.12), in: Circle())
                         }
+                        .buttonStyle(.pressable)
+                        .accessibilityLabel(showLyricsOnMobile ? "显示封面" : "显示歌词")
                     }
-                    .padding(.top, 20)
-                    .padding(.trailing, 20)
                 }
+                .padding(.top, 20)
+                .padding(.trailing, 20)
             }
         }
         #if os(macOS)
@@ -174,6 +160,25 @@ struct NowPlayingView: View {
     private var playerPlaylistID: Int? {
         guard case .playlist(let id) = player.source, id > 0 else { return nil }
         return id
+    }
+
+    private var playlistReturnButton: some View {
+        Button {
+            if playerPlaylistID != nil {
+                showPlaylist = true
+            } else {
+                ToastCenter.shared.show("当前歌曲没有关联的歌单")
+            }
+        } label: {
+            Label("返回歌单", systemImage: "music.note.list")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.92))
+                .padding(.horizontal, 11)
+                .frame(height: 36)
+                .background(.white.opacity(0.14), in: Capsule())
+        }
+        .buttonStyle(.pressable)
+        .accessibilityLabel("返回歌单")
     }
 
     private func close() {
@@ -367,7 +372,6 @@ struct NowPlayingView: View {
         VStack(spacing: 17) {
             NowPlayingScrubber()
             CompactTransportControls()
-            CompactVolumeControl()
             CompactSecondaryControls(
                 showsLyrics: showLyricsOnMobile,
                 showsQueue: showQueueOnMobile,
@@ -1091,65 +1095,6 @@ private struct CompactTransportControls: View {
         }
         .foregroundStyle(.white)
         .buttonStyle(.pressable)
-    }
-}
-
-private struct CompactVolumeControl: View {
-    @EnvironmentObject private var player: PlayerService
-    @State private var isHovering = false
-    @State private var isDragging = false
-
-    var body: some View {
-        HStack(spacing: 11) {
-            Image(systemName: "speaker.fill")
-                .font(.caption2)
-            GeometryReader { geo in
-                TranslucentSliderTrack(
-                    fraction: CGFloat(player.volume),
-                    isActive: isHovering || isDragging
-                )
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            isDragging = true
-                            updateVolume(at: value.location.x, width: geo.size.width)
-                        }
-                        .onEnded { value in
-                            updateVolume(at: value.location.x, width: geo.size.width)
-                            isDragging = false
-                        }
-                )
-            }
-            .frame(height: 24)
-            .onHover { hovering in
-                withAnimation(AppAnimation.quick) { isHovering = hovering }
-            }
-            .accessibilityElement()
-            .accessibilityLabel("音量")
-            .accessibilityValue("\(Int((player.volume * 100).rounded()))%")
-            .accessibilityAdjustableAction(adjustVolume)
-            Image(systemName: "speaker.wave.3.fill")
-                .font(.caption)
-        }
-        .foregroundStyle(.white.opacity(0.7))
-    }
-
-    private func updateVolume(at location: CGFloat, width: CGFloat) {
-        guard width > 0 else { return }
-        player.volume = Float(min(max(location / width, 0), 1))
-    }
-
-    private func adjustVolume(_ direction: AccessibilityAdjustmentDirection) {
-        let step: Float = 0.05
-        switch direction {
-        case .increment:
-            player.volume = min(player.volume + step, 1)
-        case .decrement:
-            player.volume = max(player.volume - step, 0)
-        @unknown default:
-            break
-        }
     }
 }
 
