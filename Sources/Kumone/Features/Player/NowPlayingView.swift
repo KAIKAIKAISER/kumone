@@ -18,6 +18,7 @@ struct NowPlayingView: View {
     @State private var resumeTask: Task<Void, Never>?
     @State private var showLyricsOnMobile = false
     @State private var selectedArtist: ArtistRef?
+    @State private var showPlaylist = false
     #if os(iOS)
     @State private var showQueueOnMobile = false
     #endif
@@ -54,17 +55,36 @@ struct NowPlayingView: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                if isCompact, showsClassicChrome(isCompact: isCompact) {
-                    Button {
-                        setMobileLyricsVisible(!showLyricsOnMobile)
-                    } label: {
-                        Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
-                            .frame(width: 36, height: 36)
-                            .background(.white.opacity(0.12), in: Circle())
+                if playerPlaylistID != nil || (isCompact && showsClassicChrome(isCompact: isCompact)) {
+                    HStack(spacing: 10) {
+                        if playerPlaylistID != nil {
+                            Button {
+                                showPlaylist = true
+                            } label: {
+                                Image(systemName: "music.note.list")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.88))
+                                    .frame(width: 36, height: 36)
+                                    .background(.white.opacity(0.12), in: Circle())
+                            }
+                            .buttonStyle(.pressable)
+                            .accessibilityLabel("返回歌单")
+                        }
+
+                        if isCompact, showsClassicChrome(isCompact: isCompact) {
+                            Button {
+                                setMobileLyricsVisible(!showLyricsOnMobile)
+                            } label: {
+                                Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
+                                    .frame(width: 36, height: 36)
+                                    .background(.white.opacity(0.12), in: Circle())
+                            }
+                            .buttonStyle(.pressable)
+                            .accessibilityLabel(showLyricsOnMobile ? "显示封面" : "显示歌词")
+                        }
                     }
-                    .buttonStyle(.pressable)
                     .padding(.top, 20)
                     .padding(.trailing, 20)
                 }
@@ -109,6 +129,29 @@ struct NowPlayingView: View {
                 }
             }
         }
+        .sheet(isPresented: $showPlaylist) {
+            if let playlistID = playerPlaylistID {
+                NavigationStack {
+                    PlaylistDetailView(playlistID: playlistID)
+                        .appDestinations()
+                        .toolbar {
+                            #if os(iOS)
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("完成") {
+                                    showPlaylist = false
+                                }
+                            }
+                            #else
+                            ToolbarItem {
+                                Button("完成") {
+                                    showPlaylist = false
+                                }
+                            }
+                            #endif
+                        }
+                }
+            }
+        }
         #if os(iOS)
         .onChange(of: settings.nowPlayingMode) { _ in
             showLyricsOnMobile = player.mobileNowPlayingShowsLyrics
@@ -126,6 +169,11 @@ struct NowPlayingView: View {
     private var hasLyricsColumn: Bool {
         if let lyrics = player.lyrics, !lyrics.isEmpty { return true }
         return player.lyrics == nil // still loading — keep layout stable
+    }
+
+    private var playerPlaylistID: Int? {
+        guard case .playlist(let id) = player.source, id > 0 else { return nil }
+        return id
     }
 
     private func close() {
@@ -866,6 +914,7 @@ private struct CompactTrackHeader: View {
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @State private var showAddToPlaylist = false
+    @State private var selectedArtist: ArtistRef?
 
     let showsExpandedArtwork: Bool
 
@@ -891,10 +940,8 @@ private struct CompactTrackHeader: View {
                         VIPBadge()
                     }
                 }
-                Text(player.currentTrack?.artistNames ?? "")
+                artistEntry
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .offset(
@@ -961,6 +1008,56 @@ private struct CompactTrackHeader: View {
             if let track = player.currentTrack {
                 AddToPlaylistSheet(track: track)
             }
+        }
+        .sheet(item: $selectedArtist) { artist in
+            NavigationStack {
+                ArtistDetailView(artistID: artist.id)
+                    .appDestinations()
+                    .toolbar {
+                        #if os(iOS)
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") {
+                                selectedArtist = nil
+                            }
+                        }
+                        #else
+                        ToolbarItem {
+                            Button("完成") {
+                                selectedArtist = nil
+                            }
+                        }
+                        #endif
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var artistEntry: some View {
+        let artists = player.currentTrack?.artists.filter { $0.id > 0 } ?? []
+        if artists.count == 1, let artist = artists.first {
+            Button(artist.name) {
+                selectedArtist = artist
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.8))
+            .accessibilityHint("查看歌手主页")
+        } else if artists.count > 1 {
+            Menu {
+                ForEach(artists) { artist in
+                    Button(artist.name) {
+                        selectedArtist = artist
+                    }
+                }
+            } label: {
+                Text(artists.map(\.name).joined(separator: " / "))
+                    .lineLimit(1)
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+        } else {
+            Text(player.currentTrack?.artistNames ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.white.opacity(0.62))
         }
     }
 }

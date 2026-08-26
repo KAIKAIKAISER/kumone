@@ -40,7 +40,7 @@ struct ArtistDetailView: View {
                     }
 
                     if !songs.isEmpty {
-                        SectionHeader(title: "歌曲")
+                        SectionHeader(title: "热门歌曲")
                             .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
 
                         TrackListView(
