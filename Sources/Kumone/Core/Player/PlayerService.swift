@@ -165,7 +165,6 @@ final class PlayerService: ObservableObject {
     // MARK: - Engine
 
     private static let volumeKey = "player.volume"
-    private static let legacyDefaultVolume: Float = 0.8
 
     private let engine = AVPlayer()
     private var timeObserver: Any?
@@ -177,9 +176,10 @@ final class PlayerService: ObservableObject {
 
     private init() {
         engine.actionAtItemEnd = .pause
-        volume = Self.restoredVolume(
-            UserDefaults.standard.object(forKey: Self.volumeKey) as? Float
-        )
+        // The in-app volume control was removed. Always keep the AVPlayer at
+        // full gain so the iOS system volume is the only volume attenuation.
+        volume = 1
+        UserDefaults.standard.set(1, forKey: Self.volumeKey)
         engine.volume = volume
         repeatMode = UserDefaults.standard.string(forKey: "player.repeat")
             .flatMap(RepeatMode.init) ?? .off
@@ -237,18 +237,6 @@ final class PlayerService: ObservableObject {
 
         NowPlayingManager.shared.attach(to: self)
         restoreState()
-    }
-
-    private static func restoredVolume(_ stored: Float?) -> Float {
-        guard let stored, stored.isFinite else { return 1 }
-        let clamped = min(max(stored, 0), 1)
-
-        // 0.8 was the old implicit default. The in-app volume control is gone,
-        // so migrate that attenuation to full gain and let the system own volume.
-        if abs(clamped - legacyDefaultVolume) < 0.0001 {
-            return 1
-        }
-        return clamped
     }
 
     /// Set while the user drags the seek bar so the time observer doesn't fight the thumb.
