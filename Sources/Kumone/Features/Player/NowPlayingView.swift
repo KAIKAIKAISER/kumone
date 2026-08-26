@@ -1,5 +1,19 @@
 import SwiftUI
 
+private enum NowPlayingChromeMetrics {
+    static let navigationButtonTopPadding: CGFloat = 20
+    static let navigationButtonSize: CGFloat = 36
+    static let navigationButtonContentSpacing: CGFloat = 12
+
+    /// The compact content starts below the top-left navigation button instead
+    /// of rendering underneath its overlay.
+    static var compactContentTopInset: CGFloat {
+        navigationButtonTopPadding
+            + navigationButtonSize
+            + navigationButtonContentSpacing
+    }
+}
+
 /// Immersive full-window now-playing page: artwork-tinted gradient backdrop,
 /// large artwork on the left, big synced lyrics on the right.
 struct NowPlayingView: View {
@@ -44,13 +58,16 @@ struct NowPlayingView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
-                        .frame(width: 36, height: 36)
+                        .frame(
+                            width: NowPlayingChromeMetrics.navigationButtonSize,
+                            height: NowPlayingChromeMetrics.navigationButtonSize
+                        )
                         .background(.white.opacity(0.12), in: Circle())
                 }
                 .buttonStyle(.pressable)
                 .accessibilityLabel("返回上一级")
-                .padding(.top, 20)
-                .padding(.leading, 20)
+                .padding(.top, NowPlayingChromeMetrics.navigationButtonTopPadding)
+                .padding(.leading, NowPlayingChromeMetrics.navigationButtonTopPadding)
             }
             .overlay(alignment: .topTrailing) {
                 if isCompact, showsClassicChrome(isCompact: isCompact) {
@@ -60,13 +77,16 @@ struct NowPlayingView: View {
                         Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
-                            .frame(width: 36, height: 36)
+                            .frame(
+                                width: NowPlayingChromeMetrics.navigationButtonSize,
+                                height: NowPlayingChromeMetrics.navigationButtonSize
+                            )
                             .background(.white.opacity(0.12), in: Circle())
                     }
                     .buttonStyle(.pressable)
                     .accessibilityLabel(showLyricsOnMobile ? "显示封面" : "显示歌词")
-                    .padding(.top, 20)
-                    .padding(.trailing, 20)
+                    .padding(.top, NowPlayingChromeMetrics.navigationButtonTopPadding)
+                    .padding(.trailing, NowPlayingChromeMetrics.navigationButtonTopPadding)
                 }
             }
         }
@@ -219,7 +239,7 @@ struct NowPlayingView: View {
     private func classicCompactLayout(size: CGSize) -> some View {
         let artworkDim = min(size.width - 64, size.height * 0.38, 300)
         return VStack(spacing: 20) {
-            Spacer().frame(height: 44)
+            Spacer().frame(height: NowPlayingChromeMetrics.compactContentTopInset)
             if showLyricsOnMobile {
                 lyricsColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -266,7 +286,10 @@ struct NowPlayingView: View {
 
         return VStack(spacing: 0) {
             Color.clear.frame(
-                height: NowPlayingPresentationMetrics.immersiveHeaderTopInset
+                height: max(
+                    NowPlayingPresentationMetrics.immersiveHeaderTopInset,
+                    NowPlayingChromeMetrics.compactContentTopInset
+                )
             )
 
             CompactTrackHeader(showsExpandedArtwork: showsExpandedArtwork)
