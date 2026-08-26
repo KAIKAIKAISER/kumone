@@ -18,7 +18,6 @@ struct NowPlayingView: View {
     @State private var resumeTask: Task<Void, Never>?
     @State private var showLyricsOnMobile = false
     @State private var selectedArtist: ArtistRef?
-    @State private var showPlaylist = false
     #if os(iOS)
     @State private var showQueueOnMobile = false
     #endif
@@ -39,41 +38,36 @@ struct NowPlayingView: View {
             // stretch the ZStack and push the corner overlays off-screen.
             .frame(width: geo.size.width)
             .overlay(alignment: .topLeading) {
-                if showsClassicChrome(isCompact: isCompact) {
+                Button {
+                    close()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 36, height: 36)
+                        .background(.white.opacity(0.12), in: Circle())
+                }
+                .buttonStyle(.pressable)
+                .accessibilityLabel("返回上一级")
+                .padding(.top, 20)
+                .padding(.leading, 20)
+            }
+            .overlay(alignment: .topTrailing) {
+                if isCompact, showsClassicChrome(isCompact: isCompact) {
                     Button {
-                        close()
+                        setMobileLyricsVisible(!showLyricsOnMobile)
                     } label: {
-                        Image(systemName: "chevron.down")
+                        Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
                             .frame(width: 36, height: 36)
                             .background(.white.opacity(0.12), in: Circle())
                     }
                     .buttonStyle(.pressable)
+                    .accessibilityLabel(showLyricsOnMobile ? "显示封面" : "显示歌词")
                     .padding(.top, 20)
-                    .padding(.leading, 20)
+                    .padding(.trailing, 20)
                 }
-            }
-            .overlay(alignment: .topTrailing) {
-                HStack(spacing: 10) {
-                    playlistReturnButton
-
-                    if isCompact, showsClassicChrome(isCompact: isCompact) {
-                        Button {
-                            setMobileLyricsVisible(!showLyricsOnMobile)
-                        } label: {
-                            Image(systemName: showLyricsOnMobile ? "music.note" : "quote.bubble")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(showLyricsOnMobile ? Theme.accent : .white.opacity(0.85))
-                                .frame(width: 36, height: 36)
-                                .background(.white.opacity(0.12), in: Circle())
-                        }
-                        .buttonStyle(.pressable)
-                        .accessibilityLabel(showLyricsOnMobile ? "显示封面" : "显示歌词")
-                    }
-                }
-                .padding(.top, 20)
-                .padding(.trailing, 20)
             }
         }
         #if os(macOS)
@@ -115,29 +109,6 @@ struct NowPlayingView: View {
                 }
             }
         }
-        .sheet(isPresented: $showPlaylist) {
-            if let playlistID = playerPlaylistID {
-                NavigationStack {
-                    PlaylistDetailView(playlistID: playlistID)
-                        .appDestinations()
-                        .toolbar {
-                            #if os(iOS)
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button("完成") {
-                                    showPlaylist = false
-                                }
-                            }
-                            #else
-                            ToolbarItem {
-                                Button("完成") {
-                                    showPlaylist = false
-                                }
-                            }
-                            #endif
-                        }
-                }
-            }
-        }
         #if os(iOS)
         .onChange(of: settings.nowPlayingMode) { _ in
             showLyricsOnMobile = player.mobileNowPlayingShowsLyrics
@@ -155,30 +126,6 @@ struct NowPlayingView: View {
     private var hasLyricsColumn: Bool {
         if let lyrics = player.lyrics, !lyrics.isEmpty { return true }
         return player.lyrics == nil // still loading — keep layout stable
-    }
-
-    private var playerPlaylistID: Int? {
-        guard case .playlist(let id) = player.source, id > 0 else { return nil }
-        return id
-    }
-
-    private var playlistReturnButton: some View {
-        Button {
-            if playerPlaylistID != nil {
-                showPlaylist = true
-            } else {
-                ToastCenter.shared.show("当前歌曲没有关联的歌单")
-            }
-        } label: {
-            Label("返回歌单", systemImage: "music.note.list")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.92))
-                .padding(.horizontal, 11)
-                .frame(height: 36)
-                .background(.white.opacity(0.14), in: Capsule())
-        }
-        .buttonStyle(.pressable)
-        .accessibilityLabel("返回歌单")
     }
 
     private func close() {

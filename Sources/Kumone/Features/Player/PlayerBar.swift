@@ -147,7 +147,7 @@ struct PlayerBar: View {
         .padding(.horizontal, 2)
     }
 
-    // MARK: - Right: quality / panels / volume
+    // MARK: - Right: quality / panels
 
     private func optionsSection(compact: Bool) -> some View {
         HStack(spacing: 4) {
@@ -186,7 +186,6 @@ struct PlayerBar: View {
             RoutePickerButton(diameter: 26, glyphSize: 13,
                               tint: .secondary, background: .clear)
             #endif
-            VolumeControl()
         }
     }
 
@@ -202,7 +201,6 @@ struct PlayerBar: View {
         .allowsHitTesting(false)
     }
 }
-
 // MARK: - Icon button
 
 struct PlayerIconButton: View {
@@ -338,61 +336,5 @@ struct ScrubberLane: View {
 
     private var thumbDiameter: CGFloat {
         isDragging ? 12 : (isHovering ? 10 : 8)
-    }
-}
-
-// MARK: - Volume
-
-struct VolumeControl: View {
-    @EnvironmentObject private var player: PlayerService
-    @State private var showPopover = false
-
-    var body: some View {
-        PlayerIconButton(icon: volumeIcon, size: 13) {
-            showPopover.toggle()
-        }
-        .popover(isPresented: $showPopover, arrowEdge: .top) {
-            VolumeSlider()
-                .padding(.vertical, 12)
-                .padding(.horizontal, 10)
-        }
-        .help("音量")
-    }
-
-    private var volumeIcon: String {
-        switch player.volume {
-        case 0: return "speaker.slash"
-        case ..<0.4: return "speaker.wave.1"
-        case ..<0.75: return "speaker.wave.2"
-        default: return "speaker.wave.3"
-        }
-    }
-}
-
-struct VolumeSlider: View {
-    @EnvironmentObject private var player: PlayerService
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        GeometryReader { geo in
-            let height = geo.size.height
-            ZStack(alignment: .bottom) {
-                Capsule()
-                    .fill(colorScheme == .dark ? Color.white.opacity(0.18) : .black.opacity(0.15))
-                    .frame(width: 4)
-                Capsule()
-                    .fill(Theme.accent)
-                    .frame(width: 4, height: max(4, height * CGFloat(player.volume)))
-            }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        player.volume = Float(min(max(1 - value.location.y / height, 0), 1))
-                    }
-            )
-        }
-        .frame(width: 22, height: 110)
     }
 }
