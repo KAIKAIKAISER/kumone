@@ -39,8 +39,9 @@ jobs:
           if [[ -n "$REQUESTED_VERSION" ]]; then
             VERSION="$REQUESTED_VERSION"
           else
-            VERSION="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.2.7)"
+            VERSION="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.3.8)"
             VERSION="${VERSION#v}"
+            VERSION="${VERSION%%-*}"
           fi
 
           BUILD_NUMBER="$(git rev-list --count HEAD)"
