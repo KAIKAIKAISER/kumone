@@ -126,8 +126,13 @@ final class PlayerService: ObservableObject {
     @Published private(set) var shuffleEnabled = false
     @Published var volume: Float = 1 {
         didSet {
-            engine.volume = volume
-            UserDefaults.standard.set(volume, forKey: "player.volume")
+            let normalized = volume.isFinite ? min(max(volume, 0), 1) : 1
+            if normalized != volume {
+                volume = normalized
+                return
+            }
+            engine.volume = normalized
+            UserDefaults.standard.set(normalized, forKey: Self.volumeKey)
         }
     }
 
@@ -159,6 +164,9 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Engine
 
+    private static let volumeKey = "player.volume"
+    private static let legacyDefaultVolume: Float = 0.8
+
     private let engine = AVPlayer()
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
@@ -169,7 +177,9 @@ final class PlayerService: ObservableObject {
 
     private init() {
         engine.actionAtItemEnd = .pause
-        volume = UserDefaults.standard.object(forKey: "player.volume") as? Float ?? 0.8
+        volume = Self.restoredVolume(
+            UserDefaults.standard.object(forKey: Self.volumeKey) as? Float
+        )
         engine.volume = volume
         repeatMode = UserDefaults.standard.string(forKey: "player.repeat")
             .flatMap(RepeatMode.init) ?? .off
@@ -227,6 +237,18 @@ final class PlayerService: ObservableObject {
 
         NowPlayingManager.shared.attach(to: self)
         restoreState()
+    }
+
+    private static func restoredVolume(_ stored: Float?) -> Float {
+        guard let stored, stored.isFinite else { return 1 }
+        let clamped = min(max(stored, 0), 1)
+
+        // 0.8 was the old implicit default. The in-app volume control is gone,
+        // so migrate that attenuation to full gain and let the system own volume.
+        if abs(clamped - legacyDefaultVolume) < 0.0001 {
+            return 1
+        }
+        return clamped
     }
 
     /// Set while the user drags the seek bar so the time observer doesn't fight the thumb.
