@@ -22,6 +22,7 @@ jobs:
     runs-on: macos-26
     env:
       GH_TOKEN: ${{ github.token }}
+      UPSTREAM_REPOSITORY: missuo/kumone
 
     steps:
       - name: Check out source
@@ -39,7 +40,10 @@ jobs:
           if [[ -n "$REQUESTED_VERSION" ]]; then
             VERSION="$REQUESTED_VERSION"
           else
-            VERSION="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.3.8)"
+            VERSION="$(gh api "repos/$UPSTREAM_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)"
+            if [[ -z "$VERSION" ]]; then
+              VERSION="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.3.8)"
+            fi
             VERSION="${VERSION#v}"
             VERSION="${VERSION%%-*}"
           fi
