@@ -75,7 +75,7 @@ private final class DownloadTaskDelegate: NSObject, URLSessionDownloadDelegate {
             continuation.resume(throwing: error)
         } else if let failure {
             continuation.resume(throwing: failure)
-        } else if let finishedURL, let response = downloadTask.response {
+        } else if let finishedURL, let response = self.downloadTask?.response {
             continuation.resume(returning: DownloadTaskResult(url: finishedURL, response: response))
         } else {
             let error = NSError(
@@ -227,7 +227,8 @@ final class DownloadManager: ObservableObject {
             speedBytesPerSecond: 0
         )
         let task = Task { [weak self] in
-            await self?.performDownload(track, token: token)
+            guard let self else { return }
+            await self.performDownload(track, token: token)
         }
         downloadTasks[track.id] = task
     }
@@ -260,12 +261,13 @@ final class DownloadManager: ObservableObject {
 
     private func performDownload(_ track: Track, token: UUID) async {
         defer {
-            guard downloadTokens[track.id] == token else { return }
-            downloadingIDs.remove(track.id)
-            activeProgress.removeValue(forKey: track.id)
-            progressSamples.removeValue(forKey: track.id)
-            downloadTokens.removeValue(forKey: track.id)
-            downloadTasks.removeValue(forKey: track.id)
+            if downloadTokens[track.id] == token {
+                downloadingIDs.remove(track.id)
+                activeProgress.removeValue(forKey: track.id)
+                progressSamples.removeValue(forKey: track.id)
+                downloadTokens.removeValue(forKey: track.id)
+                downloadTasks.removeValue(forKey: track.id)
+            }
         }
 
         do {
