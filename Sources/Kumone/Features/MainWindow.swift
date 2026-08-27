@@ -132,6 +132,8 @@ struct MainWindow: View {
             CollectionsView()
         case .cloud:
             CloudView()
+        case .downloads:
+            DownloadsView()
         case .playlist(let id):
             PlaylistDetailView(playlistID: id)
                 .id(id)

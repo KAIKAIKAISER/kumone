@@ -17,6 +17,10 @@ struct SidebarView: View {
                 row(.fm, title: "漫游", icon: "wave.3.right.circle.fill")
             }
 
+            Section("设备") {
+                row(.downloads, title: "下载管理", icon: "arrow.down.circle.fill")
+            }
+
             if account.hasAuthCookie {
                 Section("我的") {
                     row(.likedSongs, title: "我喜欢的音乐", icon: "heart.fill")

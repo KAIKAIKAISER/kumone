@@ -562,6 +562,9 @@ struct IOSLibraryView: View {
             }
 
             Section("设备音乐") {
+                NavigationLink(value: Destination.downloads) {
+                    Label("下载管理", systemImage: "arrow.down.circle.fill")
+                }
                 NavigationLink {
                     LocalMusicLibraryView()
                 } label: {
