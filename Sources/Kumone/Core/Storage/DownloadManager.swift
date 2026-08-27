@@ -1,6 +1,93 @@
 import Combine
 import Foundation
 
+private struct DownloadTaskResult {
+    let url: URL
+    let response: URLResponse
+}
+
+/// Bridges URLSession's delegate-based download task to async/await. The
+/// system download task writes network data directly to disk and reports
+/// progress in chunks, avoiding the per-byte overhead of AsyncBytes.
+private final class DownloadTaskDelegate: NSObject, URLSessionDownloadDelegate {
+    let destinationURL: URL
+    let onProgress: (Int64, Int64) -> Void
+
+    private var downloadTask: URLSessionDownloadTask?
+    private var continuation: CheckedContinuation<DownloadTaskResult, Error>?
+    private var finishedURL: URL?
+    private var failure: Error?
+
+    init(destinationURL: URL, onProgress: @escaping (Int64, Int64) -> Void) {
+        self.destinationURL = destinationURL
+        self.onProgress = onProgress
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: destinationURL)
+    }
+
+    func start(session: URLSession, url: URL) async throws -> DownloadTaskResult {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            let task = session.downloadTask(with: url)
+            self.downloadTask = task
+            task.resume()
+        }
+    }
+
+    func cancel() {
+        downloadTask?.cancel()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        do {
+            try FileManager.default.moveItem(at: location, to: destinationURL)
+            finishedURL = destinationURL
+        } catch {
+            failure = error
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        guard let continuation else { return }
+        self.continuation = nil
+
+        if let error {
+            continuation.resume(throwing: error)
+        } else if let failure {
+            continuation.resume(throwing: failure)
+        } else if let finishedURL, let response = self.downloadTask?.response {
+            continuation.resume(returning: DownloadTaskResult(url: finishedURL, response: response))
+        } else {
+            let error = NSError(
+                domain: "Kumone.Download",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Download did not produce a file"]
+            )
+            continuation.resume(throwing: error)
+        }
+    }
+}
+
 /// Downloads online tracks into the app's sandbox so they can be played again
 /// without resolving a new network URL. The files are intentionally kept
 /// private to the app; iOS does not allow third-party apps to write into the
@@ -73,7 +160,16 @@ final class DownloadManager: ObservableObject {
 
     private var downloadedFiles: [Int: URL] = [:]
     private var downloadedTrackMetadata: [Int: Track] = [:]
+    private var downloadTasks: [Int: Task<Void, Never>] = [:]
+    private var downloadTokens: [Int: UUID] = [:]
+    private var progressSamples: [Int: ProgressSample] = [:]
     private let fileManager = FileManager.default
+
+    private struct ProgressSample {
+        var date: Date
+        var bytes: Int64
+        var smoothedSpeed: Double
+    }
 
     private init() {
         loadIndex()
@@ -92,6 +188,12 @@ final class DownloadManager: ObservableObject {
 
     func progress(for track: Track) -> DownloadProgress? {
         activeProgress[track.id]
+    }
+
+    func cancel(_ track: Track) {
+        guard let task = downloadTasks[track.id] else { return }
+        task.cancel()
+        ToastCenter.shared.show(String(localized: "已取消下载"))
     }
 
     func fileURL(for track: Track) -> URL? {
@@ -115,15 +217,20 @@ final class DownloadManager: ObservableObject {
         else { return }
 
         downloadingIDs.insert(track.id)
+        let token = UUID()
+        downloadTokens[track.id] = token
+        progressSamples[track.id] = ProgressSample(date: Date(), bytes: 0, smoothedSpeed: 0)
         activeProgress[track.id] = DownloadProgress(
             track: track,
             downloadedBytes: 0,
             totalBytes: nil,
             speedBytesPerSecond: 0
         )
-        Task { [weak self] in
-            await self?.performDownload(track)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performDownload(track, token: token)
         }
+        downloadTasks[track.id] = task
     }
 
     func remove(_ track: Track) {
@@ -140,76 +247,41 @@ final class DownloadManager: ObservableObject {
     func removeAll() {
         downloadedFiles.removeAll()
         downloadedTrackMetadata.removeAll()
+        downloadTasks.values.forEach { $0.cancel() }
+        downloadTasks.removeAll()
+        downloadTokens.removeAll()
+        progressSamples.removeAll()
+        activeProgress.removeAll()
+        downloadingIDs.removeAll()
         downloadedIDs.removeAll()
         downloadedTracks.removeAll()
         try? fileManager.removeItem(at: Self.downloadDirectory)
         saveIndex()
     }
 
-    private func performDownload(_ track: Track) async {
+    private func performDownload(_ track: Track, token: UUID) async {
         defer {
-            downloadingIDs.remove(track.id)
-            activeProgress.removeValue(forKey: track.id)
+            if downloadTokens[track.id] == token {
+                downloadingIDs.remove(track.id)
+                activeProgress.removeValue(forKey: track.id)
+                progressSamples.removeValue(forKey: track.id)
+                downloadTokens.removeValue(forKey: track.id)
+                downloadTasks.removeValue(forKey: track.id)
+            }
         }
 
         do {
+            try Task.checkCancellation()
             let source = try await resolveSource(for: track)
-            let temporaryURL = fileManager.temporaryDirectory
-                .appendingPathComponent("Kumone-\(track.id)-\(UUID().uuidString).download")
-            let (bytes, response) = try await URLSession.shared.bytes(from: source.url)
-            guard let http = response as? HTTPURLResponse,
+            let result = try await downloadSource(from: source.url, for: track, token: token)
+            try Task.checkCancellation()
+            guard let http = result.response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode)
             else {
                 throw DownloadError.invalidResponse
             }
 
-            let totalBytes = response.expectedContentLength > 0 ? response.expectedContentLength : nil
-            fileManager.createFile(atPath: temporaryURL.path, contents: nil)
-            let fileHandle = try FileHandle(forWritingTo: temporaryURL)
-            var downloadedBytes: Int64 = 0
-            var buffer = Data()
-            buffer.reserveCapacity(64 * 1024)
-            var lastUpdate = Date()
-            var lastBytes: Int64 = 0
-            var smoothedSpeed = 0.0
-
-            do {
-                for try await byte in bytes {
-                    buffer.append(byte)
-                    if buffer.count >= 64 * 1024 {
-                        try fileHandle.write(contentsOf: buffer)
-                        downloadedBytes += Int64(buffer.count)
-                        buffer.removeAll(keepingCapacity: true)
-                        updateProgress(
-                            for: track,
-                            downloadedBytes: downloadedBytes,
-                            totalBytes: totalBytes,
-                            lastUpdate: &lastUpdate,
-                            lastBytes: &lastBytes,
-                            smoothedSpeed: &smoothedSpeed
-                        )
-                    }
-                }
-                if !buffer.isEmpty {
-                    try fileHandle.write(contentsOf: buffer)
-                    downloadedBytes += Int64(buffer.count)
-                }
-                try fileHandle.close()
-            } catch {
-                try? fileHandle.close()
-                try? fileManager.removeItem(at: temporaryURL)
-                throw error
-            }
-
-            updateProgress(
-                for: track,
-                downloadedBytes: downloadedBytes,
-                totalBytes: totalBytes,
-                lastUpdate: &lastUpdate,
-                lastBytes: &lastBytes,
-                smoothedSpeed: &smoothedSpeed,
-                force: true
-            )
+            guard downloadTokens[track.id] == token else { return }
 
             let directory = Self.downloadDirectory
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -220,7 +292,7 @@ final class DownloadManager: ObservableObject {
                 try? fileManager.removeItem(at: previous)
             }
             try? fileManager.removeItem(at: destination)
-            try fileManager.moveItem(at: temporaryURL, to: destination)
+            try fileManager.moveItem(at: result.url, to: destination)
 
             downloadedFiles[track.id] = destination
             downloadedTrackMetadata[track.id] = track
@@ -229,8 +301,38 @@ final class DownloadManager: ObservableObject {
             saveIndex()
             ToastCenter.shared.show(String(localized: "歌曲下载完成"))
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                return
+            }
             ToastCenter.shared.show("\(String(localized: "歌曲下载失败"))：\(error.localizedDescription)")
         }
+    }
+
+    private func downloadSource(
+        from url: URL,
+        for track: Track,
+        token: UUID
+    ) async throws -> DownloadTaskResult {
+        let temporaryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("Kumone-\(track.id)-\(UUID().uuidString).download")
+        let delegate = DownloadTaskDelegate(destinationURL: temporaryURL) { [weak self] written, expected in
+            Task { @MainActor [weak self] in
+                guard let self, self.downloadTokens[track.id] == token else { return }
+                self.updateProgress(
+                    for: track,
+                    downloadedBytes: written,
+                    totalBytes: expected > 0 ? expected : nil
+                )
+            }
+        }
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+
+        return try await withTaskCancellationHandler(operation: {
+            try await delegate.start(session: session, url: url)
+        }, onCancel: {
+            delegate.cancel()
+        })
     }
 
     private func resolveSource(for track: Track) async throws -> ResolvedSource {
@@ -260,31 +362,31 @@ final class DownloadManager: ObservableObject {
     private func updateProgress(
         for track: Track,
         downloadedBytes: Int64,
-        totalBytes: Int64?,
-        lastUpdate: inout Date,
-        lastBytes: inout Int64,
-        smoothedSpeed: inout Double,
-        force: Bool = false
+        totalBytes: Int64?
     ) {
+        guard downloadTokens[track.id] != nil else { return }
         let now = Date()
-        let elapsed = now.timeIntervalSince(lastUpdate)
-        guard force || elapsed >= 0.15 else { return }
+        guard var sample = progressSamples[track.id] else { return }
+        let elapsed = now.timeIntervalSince(sample.date)
+        let isComplete = totalBytes.map { downloadedBytes >= $0 } ?? false
+        guard elapsed >= 0.1 || isComplete else { return }
 
-        let delta = max(0, downloadedBytes - lastBytes)
+        let delta = max(0, downloadedBytes - sample.bytes)
         let instantSpeed = elapsed > 0 ? Double(delta) / elapsed : 0
         if instantSpeed > 0 {
-            smoothedSpeed = smoothedSpeed == 0
+            sample.smoothedSpeed = sample.smoothedSpeed == 0
                 ? instantSpeed
-                : smoothedSpeed * 0.7 + instantSpeed * 0.3
+                : sample.smoothedSpeed * 0.7 + instantSpeed * 0.3
         }
         activeProgress[track.id] = DownloadProgress(
             track: track,
             downloadedBytes: downloadedBytes,
             totalBytes: totalBytes,
-            speedBytesPerSecond: smoothedSpeed
+            speedBytesPerSecond: sample.smoothedSpeed
         )
-        lastUpdate = now
-        lastBytes = downloadedBytes
+        sample.date = now
+        sample.bytes = downloadedBytes
+        progressSamples[track.id] = sample
     }
 
     private static func fileExtension(for data: SongURLData, url: URL) -> String {

@@ -128,6 +128,8 @@
 "下载歌曲" = "Download song";
 "删除下载" = "Remove download";
 "正在下载" = "Downloading";
+"取消下载" = "Cancel download";
+"下载进度" = "Download progress";
 "下载管理" = "Downloads";
 "暂无下载歌曲" = "No downloaded songs";
 "在歌曲列表中点击下载按钮即可离线播放" = "Tap the download button on any song to play it offline";
