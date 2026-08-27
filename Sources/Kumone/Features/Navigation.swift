@@ -55,6 +55,7 @@ enum SidebarItem: Hashable {
     case recents
     case collections
     case cloud
+    case downloads
     case playlist(Int)
 }
 
@@ -67,6 +68,7 @@ enum Destination: Hashable {
     case recents
     case collections
     case cloud
+    case downloads
     case search(String)
 }
 
@@ -92,6 +94,8 @@ struct DestinationsModifier: ViewModifier {
                     CollectionsView()
                 case .cloud:
                     CloudView()
+                case .downloads:
+                    DownloadsView()
                 case .search(let query):
                     SearchView(query: query)
                 }
