@@ -7,13 +7,19 @@ struct DownloadsView: View {
     @State private var showClearConfirmation = false
 
     private var tracks: [Track] {
-        downloads.downloadedTracks.map(\.track)
+        let activeTracks = downloads.activeProgress.values
+            .map(\.track)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let activeIDs = Set(activeTracks.map(\.id))
+        return activeTracks + downloads.downloadedTracks
+            .map(\.track)
+            .filter { !activeIDs.contains($0.id) }
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if downloads.downloadedTracks.isEmpty {
+                if tracks.isEmpty {
                     EmptyStateView(
                         icon: "arrow.down.circle",
                         title: "暂无下载歌曲",
@@ -63,7 +69,7 @@ struct DownloadsView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("已下载歌曲")
+                Text(downloads.activeProgress.isEmpty ? "已下载歌曲" : "下载中")
                     .font(.system(size: 15, weight: .semibold))
                 Text(summary)
                     .font(.system(size: 12))
@@ -94,6 +100,9 @@ struct DownloadsView: View {
             fromByteCount: downloads.downloadedFileSize,
             countStyle: .file
         )
-        return String(format: String(localized: "已下载 %lld 首 · %@"), count, size)
+        let completed = String(format: String(localized: "已下载 %lld 首 · %@"), count, size)
+        guard !downloads.activeProgress.isEmpty else { return completed }
+        let active = String(format: String(localized: "正在下载 %lld 首"), downloads.activeProgress.count)
+        return "\(completed) · \(active)"
     }
 }

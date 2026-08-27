@@ -135,6 +135,8 @@
 "已下载 %lld 首 · %@" = "%lld songs · %@";
 "清空下载" = "Clear downloads";
 "清空下载歌曲？" = "Clear downloaded songs?";
+"下载中" = "Downloading";
+"正在下载 %lld 首" = "Downloading %lld songs";
 "歌曲下载完成" = "Song downloaded";
 "歌曲下载失败" = "Song download failed";
 "无法获取歌曲下载地址" = "Unable to get a download URL";
