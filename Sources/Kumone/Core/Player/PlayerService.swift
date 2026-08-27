@@ -618,6 +618,18 @@ final class PlayerService: ObservableObject {
             return
         }
 
+        if let url = DownloadManager.shared.fileURL(for: track) {
+            guard generation == resolveGeneration else { return }
+            consecutiveFailures = 0
+            await installPlayerItem(
+                url: url,
+                track: track,
+                resolvedDuration: track.duration > 0 ? track.duration : nil,
+                generation: generation
+            )
+            return
+        }
+
         let quality = SettingsManager.shared.audioQuality.rawValue
         var data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality).first
         if data?.url == nil, quality != AudioQuality.standard.rawValue {

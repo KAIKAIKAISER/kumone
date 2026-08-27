@@ -95,6 +95,7 @@
 "从歌单中删除" = "Remove from Playlist";
 "已从歌单中删除" = "Removed from playlist";
 "查看专辑" = "Go to Album";
+"打开当前歌曲所属专辑" = "Open the current song's album";
 "查看歌手：%@" = "Go to Artist: %@";
 "复制链接" = "Copy Link";
 "链接已复制" = "Link copied";
@@ -121,6 +122,16 @@
 "已收藏" = "Saved";
 "收藏" = "Save";
 "搜索歌单内歌曲" = "Search in playlist";
+"搜索歌曲名或歌手" = "Search song or artist";
+"未找到匹配歌曲" = "No matching songs";
+"请尝试其他歌曲名或歌手名" = "Try another song or artist name";
+"下载歌曲" = "Download song";
+"删除下载" = "Remove download";
+"正在下载" = "Downloading";
+"歌曲下载完成" = "Song downloaded";
+"歌曲下载失败" = "Song download failed";
+"无法获取歌曲下载地址" = "Unable to get a download URL";
+"歌曲下载响应无效" = "Invalid song download response";
 "已取消收藏" = "Removed from saved";
 "已收藏歌单" = "Playlist saved";
 "已收藏专辑" = "Album saved";
