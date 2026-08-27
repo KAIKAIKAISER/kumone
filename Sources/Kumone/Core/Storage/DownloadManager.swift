@@ -132,7 +132,7 @@ final class DownloadManager: ObservableObject {
         throw DownloadError.sourceUnavailable
     }
 
-    private static func fileExtension(for data: NeteaseAPI.SongURLData, url: URL) -> String {
+    private static func fileExtension(for data: SongURLData, url: URL) -> String {
         let candidate = data.type?.lowercased() ?? url.pathExtension.lowercased()
         let sanitized = candidate.filter { $0.isLetter || $0.isNumber }
         return sanitized.isEmpty ? "audio" : sanitized
