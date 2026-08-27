@@ -107,15 +107,24 @@ struct PlaylistDetailView: View {
                             .padding(.top, 16)
                     }
 
-                    TrackListView(
-                        tracks: model.filteredTracks,
-                        privileges: model.privileges,
-                        source: .playlist(playlistID),
-                        context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
-                        removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
-                        onRemoved: { model.remove($0) }
-                    )
-                    .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+                    if model.filteredTracks.isEmpty, !model.filter.trimmingCharacters(in: .whitespaces).isEmpty {
+                        EmptyStateView(
+                            icon: "magnifyingglass",
+                            title: "未找到匹配歌曲",
+                            subtitle: "请尝试其他歌曲名或歌手名"
+                        )
+                        .frame(minHeight: 220)
+                    } else {
+                        TrackListView(
+                            tracks: model.filteredTracks,
+                            privileges: model.privileges,
+                            source: .playlist(playlistID),
+                            context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
+                            removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
+                            onRemoved: { model.remove($0) }
+                        )
+                        .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+                    }
 
                     if model.isLoadingMore {
                         HStack {
@@ -257,6 +266,8 @@ struct PlaylistDetailView: View {
                     .buttonStyle(.pressable)
                 }
             }
+
+            playlistSearchField
         }
     }
 
@@ -367,19 +378,27 @@ struct PlaylistDetailView: View {
 
             Spacer()
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                TextField("搜索歌单内歌曲", text: $model.filter)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .frame(width: 130)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.primary.opacity(0.05), in: Capsule())
+            playlistSearchField
+                .frame(width: 180)
         }
+    }
+
+    private var playlistSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            TextField("搜索歌曲名或歌手", text: $model.filter)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+                #if os(iOS)
+                .submitLabel(.search)
+                #endif
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.primary.opacity(0.05), in: Capsule())
     }
 
     private var playable: [Track] {
