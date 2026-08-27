@@ -9,7 +9,6 @@ struct AlbumDetailView: View {
     @State private var isSubscribed = false
     @State private var isLoading = true
     @State private var errorMessage: String?
-    @State private var showFullDescription = false
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -140,10 +139,6 @@ struct AlbumDetailView: View {
                 }
             }
 
-            if let description = album.description, !description.isEmpty {
-                descriptionCard(description, album: album)
-            }
-
             // Compact Action Bar
             HStack(spacing: 10) {
                 Button {
@@ -210,10 +205,6 @@ struct AlbumDetailView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.tertiary)
 
-                if let description = album.description, !description.isEmpty {
-                    descriptionCard(description, album: album)
-                }
-
                 Spacer(minLength: 4)
 
                 HStack(spacing: 10) {
@@ -251,67 +242,6 @@ struct AlbumDetailView: View {
         .frame(height: 210)
     }
 
-    private func descriptionCard(_ description: String, album: AlbumDetail) -> some View {
-        Button {
-            showFullDescription = true
-        } label: {
-            ZStack(alignment: .bottomLeading) {
-                CachedAsyncImage(url: album.picUrl?.resizedImageURL(768), animated: false)
-                    .scaleEffect(1.08)
-                    .blur(radius: 12)
-                    .overlay(.black.opacity(0.42))
-
-                LinearGradient(
-                    colors: [.black.opacity(0.12), .black.opacity(0.82)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "text.quote")
-                        Text("专辑简介")
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .opacity(0.8)
-                    }
-                    .font(.system(size: isCompact ? 11 : 11.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
-
-                    Text(description)
-                        .font(.system(size: isCompact ? 11.5 : 12, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.88))
-                        .lineLimit(isCompact ? 3 : 2)
-                        .lineSpacing(3)
-                        .multilineTextAlignment(.leading)
-                }
-                .padding(isCompact ? 12 : 11)
-            }
-            .frame(maxWidth: .infinity, minHeight: isCompact ? 112 : 84,
-                   maxHeight: isCompact ? 112 : 84)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
-                    .strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
-            }
-            .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
-        }
-        .buttonStyle(.plain)
-        #if os(iOS)
-        .sheet(isPresented: $showFullDescription) {
-            NavigationStack {
-                AlbumDescriptionView(album: album, description: description)
-            }
-        }
-        #else
-        .popover(isPresented: $showFullDescription, arrowEdge: .bottom) {
-            AlbumDescriptionView(album: album, description: description)
-                .frame(width: 430, height: 460)
-        }
-        #endif
-    }
-
     private var totalDuration: String {
         let totalMS = tracks.reduce(into: 0) { $0 += $1.durationMS }
         return Formatters.longDuration(TimeInterval(totalMS) / 1000)
@@ -343,85 +273,5 @@ struct AlbumDetailView: View {
         }
         .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
         .padding(.top, 16)
-    }
-}
-
-private struct AlbumDescriptionView: View {
-    let album: AlbumDetail
-    let description: String
-
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        ZStack {
-            CachedAsyncImage(url: album.picUrl?.resizedImageURL(1024), animated: false)
-                .scaleEffect(1.2)
-                .blur(radius: 28)
-
-            LinearGradient(
-                colors: [
-                    .black.opacity(0.72),
-                    .black.opacity(0.84),
-                    .black.opacity(0.96)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 9) {
-                        Label("专辑简介", systemImage: "text.quote")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.78))
-
-                        Text(album.name)
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(3)
-
-                        if let artist = album.artist {
-                            Text(artist.name)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Theme.accent.opacity(0.95))
-                        }
-                    }
-
-                    Rectangle()
-                        .fill(.white.opacity(0.2))
-                        .frame(height: 1)
-
-                    Text(description)
-                        .font(.system(size: 16, weight: .regular, design: .serif))
-                        .foregroundStyle(.white.opacity(0.92))
-                        .lineSpacing(8)
-                        .multilineTextAlignment(.leading)
-                        .textSelection(.enabled)
-
-                    if let company = album.company, !company.isEmpty {
-                        Text(company)
-                            .font(.system(size: 11.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.55))
-                            .padding(.top, 4)
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 28)
-            }
-        }
-        .background(Color.black)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("完成") { dismiss() }
-            }
-        }
-        #if os(iOS)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .navigationTitle("专辑简介")
-        .navigationBarTitleDisplayMode(.inline)
-        #else
-        .navigationTitle("专辑简介")
-        #endif
     }
 }

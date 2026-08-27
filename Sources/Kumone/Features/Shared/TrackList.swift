@@ -9,12 +9,22 @@ enum TrackRowStyle {
     case compact
 }
 
+enum TrackDownloadAction: Equatable {
+    /// Show the normal download/remove toggle used by remote song lists.
+    case automatic
+    /// Show only a remove action for a list that already contains downloads.
+    case removeOnly
+    /// Do not show an inline download action.
+    case hidden
+}
+
 // MARK: - Row
 
 struct TrackRow: View {
     let track: Track
     let index: Int
     var style: TrackRowStyle = .full
+    var downloadAction: TrackDownloadAction = .automatic
     var playability: TrackPlayability = .playable
     /// Extra trailing text (e.g. play count for recents).
     var trailingText: String?
@@ -198,9 +208,9 @@ struct TrackRow: View {
 
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
-            if !track.isLocal, isCompact || isHovering {
+            if !track.isLocal, downloadAction != .hidden, isCompact || isHovering {
                 Button {
-                    if downloads.isDownloaded(track) {
+                    if downloadAction == .removeOnly || downloads.isDownloaded(track) {
                         downloads.remove(track)
                     } else {
                         downloads.download(track)
@@ -209,6 +219,10 @@ struct TrackRow: View {
                     if downloads.isDownloading(track) {
                         ProgressView()
                             .controlSize(.mini)
+                    } else if downloadAction == .removeOnly {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
                     } else {
                         Image(systemName: downloads.isDownloaded(track)
                               ? "arrow.down.circle.fill"
@@ -219,7 +233,7 @@ struct TrackRow: View {
                 }
                 .buttonStyle(.pressable)
                 .disabled(downloads.isDownloading(track))
-                .accessibilityLabel(downloads.isDownloaded(track)
+                .accessibilityLabel(downloadAction == .removeOnly || downloads.isDownloaded(track)
                                     ? String(localized: "删除下载")
                                     : String(localized: "下载歌曲"))
             }
@@ -491,6 +505,7 @@ final class SpectrumBarsView: PlatformView {
 struct TrackListView: View {
     let tracks: [Track]
     var style: TrackRowStyle = .full
+    var downloadAction: TrackDownloadAction = .automatic
     var privileges: [Int: TrackPrivilege] = [:]
     var source: PlaySource = .none
     /// The place this list belongs to, for the Dock menu's recents.
@@ -508,6 +523,7 @@ struct TrackListView: View {
                     track: track,
                     index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
                     style: style,
+                    downloadAction: downloadAction,
                     playability: playability(of: track),
                     removableFromPlaylistID: removableFromPlaylistID,
                     onRemoved: { onRemoved?(track) }

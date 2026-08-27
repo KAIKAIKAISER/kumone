@@ -26,6 +26,7 @@ struct DownloadsView: View {
                     TrackListView(
                         tracks: tracks,
                         style: .full,
+                        downloadAction: .removeOnly,
                         source: .none,
                         context: nil
                     )
