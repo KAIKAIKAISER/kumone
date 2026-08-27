@@ -4,23 +4,25 @@ import SwiftUI
 public struct KumoneApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    @State private var player = PlayerService.shared
-    @State private var account = AccountStore.shared
-    @State private var settings = SettingsManager.shared
-    @State private var toasts = ToastCenter.shared
+    @StateObject private var player = PlayerService.shared
+    @StateObject private var account = AccountStore.shared
+    @StateObject private var settings = SettingsManager.shared
+    @StateObject private var toasts = ToastCenter.shared
 
     public init() {}
 
     public var body: some Scene {
         WindowGroup("Kumone", id: "main") {
             MainWindow()
-                .environment(player)
-                .environment(account)
-                .environment(settings)
-                .environment(toasts)
+                .environmentObject(player)
+                .environmentObject(account)
+                .environmentObject(settings)
+                .environmentObject(toasts)
                 .tint(Theme.accent)
                 .preferredColorScheme(settings.appearance.colorScheme)
-                .frame(minWidth: Theme.Layout.minWindowWidth,
+                .frame(minWidth: player.showNowPlaying
+                           ? Theme.Layout.minWindowWidthSidebarCollapsed
+                           : Theme.Layout.minWindowWidth,
                        minHeight: Theme.Layout.minWindowHeight)
         }
         .defaultSize(width: Theme.Layout.defaultWindowWidth,
@@ -73,8 +75,8 @@ public struct KumoneApp: App {
 
         Settings {
             SettingsView()
-                .environment(account)
-                .environment(settings)
+                .environmentObject(account)
+                .environmentObject(settings)
                 .tint(Theme.accent)
                 .preferredColorScheme(settings.appearance.colorScheme)
         }
@@ -82,9 +84,15 @@ public struct KumoneApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static weak var shared: AppDelegate?
+
     private var keyMonitor: Any?
+    /// Installed by the SwiftUI main scene. Calling it recreates the scene
+    /// when its NSWindow was released after the user closed the last window.
+    var openMainWindow: (() -> Void)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.shared = self
         // Space toggles play/pause unless a text field is being edited.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let noModifiers = event.modifierFlags
@@ -110,14 +118,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        DockMenu.shared.makeMenu()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            sender.windows.first { $0.identifier?.rawValue.contains("main") ?? false }?
-                .makeKeyAndOrderFront(nil)
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        // `hasVisibleWindows` includes helper windows such as desktop lyrics.
+        // If the WindowGroup has already released its NSWindow, use the
+        // SwiftUI scene action below to create it again.
+        if let mainWindow = sender.windows.first(where: {
+            $0.styleMask.contains(.titled) && $0.canBecomeMain
+        }), !mainWindow.isVisible {
+            mainWindow.makeKeyAndOrderFront(nil)
+        } else if !sender.windows.contains(where: {
+            $0.isVisible && $0.styleMask.contains(.titled) && $0.canBecomeMain
+        }) {
+            openMainWindow?()
         }
         return true
     }

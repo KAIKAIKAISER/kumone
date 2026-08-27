@@ -3,8 +3,9 @@ import SwiftUI
 // MARK: - Lyrics panel
 
 struct LyricsPanel: View {
-    @Environment(PlayerService.self) private var player
-    @Environment(SettingsManager.self) private var settings
+    @EnvironmentObject private var player: PlayerService
+    @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
+    @EnvironmentObject private var settings: SettingsManager
 
     @State private var activeIndex: Int?
     @State private var isUserScrolling = false
@@ -68,8 +69,7 @@ struct LyricsPanel: View {
                     }
                     .padding(.horizontal, 20)
                 }
-                .onChange(of: player.progress) {
-                    let index = lyrics.activeIndex(at: player.progress + 0.2)
+                .onChange(of: lyricsCursor.activeIndex) { index in
                     guard index != activeIndex else { return }
                     activeIndex = index
                     guard !isUserScrolling, let index else { return }
@@ -77,7 +77,10 @@ struct LyricsPanel: View {
                         proxy.scrollTo(index, anchor: .center)
                     }
                 }
-                .onChange(of: player.currentTrack?.id) {
+                .onAppear {
+                    adoptCursor(proxy: proxy)
+                }
+                .onChange(of: player.currentTrack?.id) { _ in
                     activeIndex = nil
                     proxy.scrollTo(0, anchor: .top)
                 }
@@ -108,11 +111,30 @@ struct LyricsPanel: View {
         }
     }
 
+
+    /// Jump straight to the line the song is on. Used when the view appears,
+    /// where waiting for the next line change would leave the lyrics parked at
+    /// the top. Scrolling is deferred a turn: the list has not laid out yet
+    /// while `onAppear` runs, and `scrollTo` on an unlaid list does nothing.
+    private func adoptCursor(proxy: ScrollViewProxy) {
+        let index = lyricsCursor.activeIndex
+        activeIndex = index
+        guard let index else { return }
+        DispatchQueue.main.async {
+            proxy.scrollTo(index, anchor: .center)
+        }
+    }
+
     private func lyricLine(_ line: LyricLine, isActive: Bool) -> some View {
         Button {
             player.seek(to: line.time)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
+                if settings.showLyricsRomaji, let romaji = line.romaji {
+                    Text(romaji)
+                        .font(.system(size: isActive ? 12 : 11))
+                        .foregroundStyle(isActive ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                }
                 Text(line.text.isEmpty ? "♪" : line.text)
                     .font(.system(size: isActive ? 16 : 14, weight: isActive ? .bold : .medium))
                     .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
@@ -136,7 +158,7 @@ struct LyricsPanel: View {
 // MARK: - Queue panel
 
 struct QueuePanel: View {
-    @Environment(PlayerService.self) private var player
+    @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         VStack(spacing: 0) {
@@ -210,7 +232,7 @@ private struct QueueRow: View {
     let track: Track
     let isCurrent: Bool
 
-    @Environment(PlayerService.self) private var player
+    @EnvironmentObject private var player: PlayerService
     @State private var isHovering = false
 
     var body: some View {

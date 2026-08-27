@@ -1,0 +1,93 @@
+name: Publish iOS main build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CFBundleShortVersionString (leave blank to use the latest v* tag)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-ios-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM_REPOSITORY: missuo/kumone
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Test core package
+        run: swift test
+
+      - name: Build unsigned iOS IPA
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            VERSION="$REQUESTED_VERSION"
+          else
+            VERSION="$(gh api "repos/$UPSTREAM_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)"
+            if [[ -z "$VERSION" ]]; then
+              VERSION="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.3.8)"
+            fi
+            VERSION="${VERSION#v}"
+            VERSION="${VERSION%%-*}"
+          fi
+
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          ASSET_NAME="Kumone-iOS-${VERSION}-${BUILD_NUMBER}-${SHORT_SHA}-unsigned.ipa"
+
+          xcodebuild -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ios-dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            build
+
+          APP="$RUNNER_TEMP/ios-dd/Build/Products/Release-iphoneos/KumoneIOS.app"
+          test -d "$APP"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" dist
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+          ditto -c -k --keepParent "$RUNNER_TEMP/ipa/Payload" "dist/$ASSET_NAME"
+
+          {
+            echo "VERSION=$VERSION"
+            echo "BUILD_NUMBER=$BUILD_NUMBER"
+            echo "SHORT_SHA=$SHORT_SHA"
+            echo "ASSET_NAME=$ASSET_NAME"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish GitHub pre-release
+        run: |
+          TAG="ios-main-${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "Unsigned iOS IPA built from main commit $GITHUB_SHA."
+            echo
+            echo "Version: $VERSION"
+            echo "Build number: $BUILD_NUMBER"
+            echo
+            echo "The IPA must be signed before installation."
+          } > "$NOTES"
+
+          gh release create "$TAG" "dist/$ASSET_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Kumone iOS $VERSION ($SHORT_SHA)" \
+            --notes-file "$NOTES" \
+            --prerelease

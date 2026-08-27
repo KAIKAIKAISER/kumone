@@ -12,9 +12,10 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
-  group: sync-upstream-ios-release
+  group: sync-upstream-main
   cancel-in-progress: false
 
 jobs:
@@ -23,6 +24,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       UPSTREAM_REPOSITORY: missuo/kumone
+      SYNC_BRANCH: automation/sync-upstream-main
     steps:
       - uses: actions/checkout@v5
         with:
@@ -50,8 +52,50 @@ jobs:
           echo "title=$TITLE" >> "$GITHUB_OUTPUT"
           echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
 
+      - name: Create or update upstream sync PR
+        id: sync
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/missuo/kumone.git
+          git fetch origin main
+          git fetch upstream main
+
+          if git merge-base --is-ancestor upstream/main origin/main; then
+            git checkout --detach origin/main
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Fork main already contains upstream main."
+            exit 0
+          fi
+
+          git switch -C "$SYNC_BRANCH" origin/main
+          if ! git merge --no-edit --no-ff upstream/main; then
+            echo "::error::Upstream changes conflict with the fork. The sync PR was not updated."
+            git merge --abort || true
+            exit 1
+          fi
+
+          git push --force-with-lease origin "$SYNC_BRANCH"
+
+          UPSTREAM_SHA="$(git rev-parse --short upstream/main)"
+          PR_NUMBER="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+            --head "$SYNC_BRANCH" --json number --jq '.[0].number')"
+          if [[ -n "$PR_NUMBER" ]]; then
+            echo "Updated upstream sync PR #$PR_NUMBER to $UPSTREAM_SHA."
+          else
+            gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head "$SYNC_BRANCH" \
+              --title "Sync upstream main ($UPSTREAM_SHA)" \
+              --body "Merges missuo/kumone main at $UPSTREAM_SHA into the fork. CI must pass before this PR is merged."
+          fi
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+
       - name: Skip an already mirrored release
         id: existing
+        if: steps.sync.outputs.ready == 'true'
         env:
           TAG: ${{ steps.release.outputs.tag }}
           ASSET_NAME: ${{ steps.release.outputs.asset_name }}
@@ -63,18 +107,8 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Merge upstream main
-        if: steps.existing.outputs.skip != 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/missuo/kumone.git
-          git fetch upstream main
-          git merge --no-edit upstream/main
-          git push origin HEAD:main
-
       - name: Build unsigned iOS IPA
-        if: steps.existing.outputs.skip != 'true'
+        if: steps.sync.outputs.ready == 'true' && steps.existing.outputs.skip != 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
           ASSET_NAME: ${{ steps.release.outputs.asset_name }}
@@ -93,7 +127,7 @@ jobs:
           ditto -c -k --keepParent "$RUNNER_TEMP/ipa/Payload" "dist/$ASSET_NAME"
 
       - name: Publish mirrored release
-        if: steps.existing.outputs.skip != 'true'
+        if: steps.sync.outputs.ready == 'true' && steps.existing.outputs.skip != 'true'
         env:
           API_PATH: ${{ steps.release.outputs.api_path }}
           TAG: ${{ steps.release.outputs.tag }}

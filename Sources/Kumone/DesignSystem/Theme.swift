@@ -22,6 +22,11 @@ enum Theme {
     enum Layout {
         static let contentInset: CGFloat = 24
         static let cardSize: CGFloat = 160
+        /// Row height for a shelf of cover cards: artwork, then up to two lines
+        /// of title and one of subtitle.
+        static let coverShelfHeight: CGFloat = 226
+        /// Row height for a shelf of artist cards: circular artwork, one name.
+        static let artistShelfHeight: CGFloat = 196
         static let sidebarWidth: CGFloat = 220
         static let playerBarHeight: CGFloat = 56
         /// Gap between the floating player bar and the window's bottom edge.
@@ -30,6 +35,18 @@ enum Theme {
         /// Bottom inset pages need so scrolled content clears the floating bar.
         static var playerChromeClearance: CGFloat { playerBarHeight + playerBarBottomMargin }
         static let minWindowWidth: CGFloat = 1020
+        /// Width the split view's divider occupies between the two columns.
+        static let splitDividerWidth: CGFloat = 8
+        /// Window minimum while the sidebar is collapsed. The window-wide
+        /// minimum is a *content* constraint, so with the sidebar hidden it
+        /// lands entirely on the detail column; restoring the sidebar would
+        /// then add its width on top and `.contentMinSize` would widen the
+        /// window every time the now-playing page is dismissed (#19).
+        /// Subtracting the sidebar here keeps the restored total at
+        /// `minWindowWidth`.
+        static var minWindowWidthSidebarCollapsed: CGFloat {
+            minWindowWidth - sidebarWidth - splitDividerWidth
+        }
         static let minWindowHeight: CGFloat = 640
         static let defaultWindowWidth: CGFloat = 1200
         static let defaultWindowHeight: CGFloat = 780
@@ -54,6 +71,12 @@ enum AppAnimation {
 }
 
 extension View {
+    /// `scrollClipDisabled` is iOS 17 / macOS 14; older systems clip normally.
+    @ViewBuilder
+    func compatScrollClipDisabled() -> some View {
+        if #available(iOS 17.0, macOS 14.0, *) { scrollClipDisabled() } else { self }
+    }
+
     /// Hides the toolbar background; `toolbarBackgroundVisibility` is
     /// macOS 15+/iOS 18+, so iOS 17 falls back to `toolbarBackground`.
     @ViewBuilder

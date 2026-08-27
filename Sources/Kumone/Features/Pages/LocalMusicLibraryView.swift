@@ -1,18 +1,17 @@
 #if os(iOS)
+import Combine
 import MediaPlayer
-import Observation
 import SwiftUI
 import UIKit
 
 @MainActor
-@Observable
-final class LocalMusicLibrary {
+final class LocalMusicLibrary: ObservableObject {
     static let shared = LocalMusicLibrary()
 
-    private(set) var authorizationStatus = MPMediaLibrary.authorizationStatus()
-    private(set) var tracks: [Track] = []
-    private(set) var unavailableTrackCount = 0
-    private(set) var isLoading = false
+    @Published private(set) var authorizationStatus = MPMediaLibrary.authorizationStatus()
+    @Published private(set) var tracks: [Track] = []
+    @Published private(set) var unavailableTrackCount = 0
+    @Published private(set) var isLoading = false
 
     private init() {}
 
@@ -65,8 +64,8 @@ final class LocalMusicLibrary {
 }
 
 struct LocalMusicLibraryView: View {
-    @State private var library = LocalMusicLibrary.shared
-    @Environment(PlayerService.self) private var player
+    @StateObject private var library = LocalMusicLibrary.shared
+    @EnvironmentObject private var player: PlayerService
     @Environment(\.scenePhase) private var scenePhase
     @State private var searchText = ""
 
@@ -97,8 +96,8 @@ struct LocalMusicLibraryView: View {
         .task {
             library.reload()
         }
-        .onChange(of: scenePhase) {
-            if scenePhase == .active {
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
                 library.reload()
             }
         }
@@ -126,12 +125,12 @@ struct LocalMusicLibraryView: View {
                         Spacer()
                     }
                 } else if visibleTracks.isEmpty {
-                    ContentUnavailableView(
+                    localEmptyState(
                         searchText.isEmpty ? "没有可播放的本地音乐" : "未找到本地音乐",
                         systemImage: searchText.isEmpty ? "music.note.slash" : "magnifyingglass",
-                        description: Text(searchText.isEmpty
+                        description: searchText.isEmpty
                             ? "请先用“音乐”App 将歌曲下载到这台设备。"
-                            : "请尝试其他歌曲名、歌手或专辑名。")
+                            : "请尝试其他歌曲名、歌手或专辑名。"
                     )
                     .listRowBackground(Color.clear)
                 } else {
@@ -169,30 +168,62 @@ struct LocalMusicLibraryView: View {
     }
 
     private var permissionView: some View {
-        ContentUnavailableView {
-            Label("读取本地音乐", systemImage: "music.note.house")
-        } description: {
+        VStack(spacing: 14) {
+            Image(systemName: "music.note.house")
+                .font(.system(size: 42))
+                .foregroundStyle(Theme.accent)
+            Text("读取本地音乐")
+                .font(.title3.weight(.semibold))
             Text("允许 Kumone 读取设备音乐资料库，即可浏览和播放已下载的歌曲。")
-        } actions: {
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             Button("允许访问") {
                 Task { await library.requestAccess() }
             }
             .buttonStyle(.borderedProminent)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
     private var deniedView: some View {
-        ContentUnavailableView {
-            Label("无法访问音乐资料库", systemImage: "lock.fill")
-        } description: {
+        VStack(spacing: 14) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 42))
+                .foregroundStyle(.secondary)
+            Text("无法访问音乐资料库")
+                .font(.title3.weight(.semibold))
             Text("请在系统设置中允许 Kumone 访问“媒体与 Apple Music”。")
-        } actions: {
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             Button("打开系统设置") {
                 guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                 UIApplication.shared.open(url)
             }
             .buttonStyle(.borderedProminent)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+    }
+
+    private func localEmptyState(
+        _ title: String,
+        systemImage: String,
+        description: String
+    ) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.headline)
+            Text(description)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
     }
 }
 

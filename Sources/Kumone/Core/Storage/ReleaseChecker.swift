@@ -11,14 +11,17 @@ enum ReleaseChecker {
         let ipaURL: URL?
     }
 
-    static let releasesPage = URL(string: "https://github.com/missuo/kumone/releases/latest")!
+    private static let repository = "KAIKAIKAISER/kumone"
+    static let releasesPage = URL(string: "https://github.com/\(repository)/releases/latest")!
 
     static var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
     }
 
     static func latest() async throws -> Release {
-        var request = URLRequest(url: URL(string: "https://api.github.com/repos/missuo/kumone/releases/latest")!)
+        var request = URLRequest(
+            url: URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+        )
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 15
         let (data, _) = try await URLSession.shared.data(for: request)
@@ -35,13 +38,18 @@ enum ReleaseChecker {
 
     /// True when `remote` is newer than `local` (numeric dotted compare).
     static func isNewer(_ remote: String, than local: String) -> Bool {
-        let a = remote.split(separator: ".").map { Int($0) ?? 0 }
-        let b = local.split(separator: ".").map { Int($0) ?? 0 }
+        let a = versionComponents(remote)
+        let b = versionComponents(local)
         for i in 0..<max(a.count, b.count) {
             let x = i < a.count ? a[i] : 0
             let y = i < b.count ? b[i] : 0
             if x != y { return x > y }
         }
         return false
+    }
+
+    private static func versionComponents(_ version: String) -> [Int] {
+        let core = version.split(separator: "-", maxSplits: 1).first ?? Substring(version)
+        return core.split(separator: ".").map { Int($0) ?? 0 }
     }
 }

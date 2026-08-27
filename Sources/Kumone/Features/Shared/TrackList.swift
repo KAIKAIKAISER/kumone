@@ -23,14 +23,26 @@ struct TrackRow: View {
     var onRemoved: (() -> Void)?
     let onPlay: () -> Void
 
-    @Environment(PlayerService.self) private var player
-    @Environment(AccountStore.self) private var account
+    @EnvironmentObject private var player: PlayerService
+    @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
+    @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
+    @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
     @State private var isHovering = false
     @State private var showAddToPlaylist = false
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
     private var isPlayable: Bool { playability == .playable }
+    private var showsArtwork: Bool { style != .albumTrack }
+
+    private var hidesLeadingIndex: Bool {
+        #if os(iOS)
+        return isCompact && showsArtwork
+        #else
+        return false
+        #endif
+    }
 
     private var isCompact: Bool {
         #if os(iOS)
@@ -41,19 +53,19 @@ struct TrackRow: View {
     }
 
     var body: some View {
-        HStack(spacing: isCompact ? 10 : 12) {
-            leadingIndicator
+        HStack(spacing: 12) {
+            if !hidesLeadingIndex {
+                leadingIndicator
+            }
 
-            if style != .albumTrack {
-                CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
-                    .frame(width: isCompact ? 38 : 42, height: isCompact ? 38 : 42)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+            if showsArtwork {
+                artwork
             }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(track.name)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(isCompact ? .callout.weight(.medium) : .system(size: 13, weight: .medium))
                         .foregroundStyle(isCurrent ? Theme.accent : .primary)
                         .lineLimit(1)
                     if let subtitle = track.subtitle, !isCompact {
@@ -67,7 +79,7 @@ struct TrackRow: View {
                     }
                 }
                 Text(track.artistNames)
-                    .font(.system(size: 11.5))
+                    .font(isCompact ? .footnote : .system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -101,11 +113,11 @@ struct TrackRow: View {
 
             likeAndDuration
         }
-        .padding(.horizontal, isCompact ? 6 : 10)
-        .padding(.vertical, isCompact ? 4 : 5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, isCompact ? 6 : 5)
         // Fixed row height keeps lazy-stack height estimation exact,
         // preventing scroll-offset jumps in long lists (#3).
-        .frame(height: style == .albumTrack ? (isCompact ? 44 : 46) : (isCompact ? 48 : 52))
+        .frame(height: rowHeight)
         .opacity(isPlayable ? 1 : 0.45)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
@@ -131,10 +143,42 @@ struct TrackRow: View {
     }
 
     @ViewBuilder
+    private var artwork: some View {
+        if isCompact {
+            CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(160), animated: false)
+                .frame(width: compactArtworkSize, height: compactArtworkSize)
+                .overlay(alignment: .bottomTrailing) {
+                    if hidesLeadingIndex, isCurrent {
+                        PlayingIndicator(animating: player.isPlaying && !player.showNowPlaying)
+                            .padding(5)
+                            .background(
+                                .ultraThinMaterial,
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            )
+                            .padding(4)
+                    }
+                }
+                .compositingGroup()
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        } else {
+            CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
+                .frame(width: 42, height: 42)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        }
+    }
+
+    private var rowHeight: CGFloat {
+        if style == .albumTrack {
+            return isCompact ? compactAlbumRowHeight : 46
+        }
+        return isCompact ? compactRowHeight : 52
+    }
+
+    @ViewBuilder
     private var leadingIndicator: some View {
         ZStack {
             if isCurrent {
-                PlayingIndicator(animating: player.isPlaying)
+                PlayingIndicator(animating: player.isPlaying && !player.showNowPlaying)
             } else if isHovering, isPlayable {
                 Button(action: onPlay) {
                     Image(systemName: "play.fill")
@@ -219,23 +263,185 @@ struct TrackRow: View {
 
 // MARK: - Playing indicator
 
+/// The four bars beside the row that's playing.
+///
+/// Deliberately not a SwiftUI animation. Driving these from `TimelineView` —
+/// as this did for a long time — makes SwiftUI re-evaluate and re-lay-out the
+/// enclosing tree on every tick, and with the now-playing page presented as an
+/// overlay that tree is the entire window. Profiling put the cost at roughly
+/// 30% of a core, for four 14pt bars.
+///
+/// Scaling plain `CALayer`s instead is a compositing change: no `draw`, no
+/// layout invalidation, nothing above it in the tree ever learns a frame
+/// happened.
 struct PlayingIndicator: View {
     var animating: Bool
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 20, paused: !animating)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 2) {
-                ForEach(0..<4, id: \.self) { i in
-                    let phase = t * 2.4 + Double(i) * 0.9
-                    let height: CGFloat = animating ? 4 + 8 * abs(sin(phase)) : 4
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(Theme.accent)
-                        .frame(width: 2.5, height: height)
-                }
-            }
-            .frame(height: 14, alignment: .center)
+        SpectrumBars(animating: animating)
+            .frame(width: SpectrumBarsView.width, height: SpectrumBarsView.maxHeight)
+    }
+}
+
+#if os(macOS)
+private struct SpectrumBars: NSViewRepresentable {
+    var animating: Bool
+    func makeNSView(context: Context) -> SpectrumBarsView { SpectrumBarsView() }
+    func updateNSView(_ view: SpectrumBarsView, context: Context) {
+        view.animating = animating
+    }
+    static func dismantleNSView(_ view: SpectrumBarsView, coordinator: ()) {
+        view.animating = false
+    }
+}
+#else
+private struct SpectrumBars: UIViewRepresentable {
+    var animating: Bool
+    func makeUIView(context: Context) -> SpectrumBarsView { SpectrumBarsView() }
+    func updateUIView(_ view: SpectrumBarsView, context: Context) {
+        view.animating = animating
+    }
+    static func dismantleUIView(_ view: SpectrumBarsView, coordinator: ()) {
+        view.animating = false
+    }
+}
+#endif
+
+final class SpectrumBarsView: PlatformView {
+    static let minHeight: CGFloat = 3
+    static let maxHeight: CGFloat = 14
+    static let barWidth: CGFloat = 2.5
+    static let spacing: CGFloat = 2
+    static let width =
+        CGFloat(AudioSpectrum.bandCount) * barWidth
+        + CGFloat(AudioSpectrum.bandCount - 1) * spacing
+
+    private var bars: [CALayer] = []
+    private var timer: Timer?
+    private var startedAt = CACurrentMediaTime()
+
+    var animating = false {
+        didSet {
+            guard animating != oldValue else { return }
+            animating ? start() : stop()
         }
+    }
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: Self.width, height: Self.maxHeight))
+        #if os(macOS)
+        wantsLayer = true
+        #endif
+        buildBars()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    deinit { timer?.invalidate() }
+
+    /// `NSView.layer` is optional; `UIView.layer` is not.
+    private var hostLayer: CALayer? { layer }
+
+    private func buildBars() {
+        guard let host = hostLayer else { return }
+        let color = PlatformColor(Theme.accent).cgColor
+        for _ in 0..<AudioSpectrum.bandCount {
+            let bar = CALayer()
+            bar.backgroundColor = color
+            bar.cornerRadius = 1
+            // Centered anchor so a scale grows the bar symmetrically.
+            bar.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            bar.bounds = CGRect(x: 0, y: 0, width: Self.barWidth, height: Self.maxHeight)
+            host.addSublayer(bar)
+            bars.append(bar)
+        }
+        apply(scaleForAll: Self.minHeight / Self.maxHeight)
+    }
+
+    #if os(macOS)
+    override func layout() {
+        super.layout()
+        positionBars()
+    }
+    #else
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        positionBars()
+    }
+    #endif
+
+    private func positionBars() {
+        for (i, bar) in bars.enumerated() {
+            bar.position = CGPoint(
+                x: CGFloat(i) * (Self.barWidth + Self.spacing) + Self.barWidth / 2,
+                y: bounds.midY)
+        }
+    }
+
+    private func start() {
+        guard timer == nil else { return }
+        startedAt = CACurrentMediaTime()
+        // Common mode so the bars keep moving while a list is being scrolled.
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func stop() {
+        timer?.invalidate()
+        timer = nil
+        apply(scaleForAll: Self.minHeight / Self.maxHeight)
+    }
+
+    @MainActor
+    private func tick() {
+        let spectrum = AudioSpectrum.shared
+        let live: Bool
+        switch spectrum.tapState {
+        case .tapped:
+            // Samples may still be a few hundred milliseconds out while the
+            // source buffers. Hold still through that rather than animating,
+            // which reads as a glitch right as a song starts.
+            live = spectrum.isLive
+            guard live else {
+                apply(scaleForAll: Self.minHeight / Self.maxHeight)
+                return
+            }
+        case .untappable:
+            live = false
+        case .idle, .preparing:
+            // Not yet known whether this source can be tapped.
+            apply(scaleForAll: Self.minHeight / Self.maxHeight)
+            return
+        }
+
+        let elapsed = CACurrentMediaTime() - startedAt
+        let span = Self.maxHeight - Self.minHeight
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (i, bar) in bars.enumerated() {
+            // Real band levels when the tap is feeding us; otherwise the old
+            // decorative sine, so untappable sources still look alive.
+            let level = live
+                ? CGFloat(spectrum.level(at: i))
+                : CGFloat(abs(sin(elapsed * 2.4 + Double(i) * 0.9)))
+            let height = Self.minHeight + span * level
+            bar.transform = CATransform3DMakeScale(1, height / Self.maxHeight, 1)
+        }
+        CATransaction.commit()
+    }
+
+    private func apply(scaleForAll scale: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for bar in bars {
+            bar.transform = CATransform3DMakeScale(1, scale, 1)
+        }
+        CATransaction.commit()
     }
 }
 
@@ -246,11 +452,13 @@ struct TrackListView: View {
     var style: TrackRowStyle = .full
     var privileges: [Int: TrackPrivilege] = [:]
     var source: PlaySource = .none
+    /// The place this list belongs to, for the Dock menu's recents.
+    var context: PlayContext?
     var removableFromPlaylistID: Int?
     var onRemoved: ((Track) -> Void)?
 
-    @Environment(PlayerService.self) private var player
-    @Environment(AccountStore.self) private var account
+    @EnvironmentObject private var player: PlayerService
+    @EnvironmentObject private var account: AccountStore
 
     var body: some View {
         LazyVStack(spacing: 1) {
@@ -263,7 +471,8 @@ struct TrackListView: View {
                     removableFromPlaylistID: removableFromPlaylistID,
                     onRemoved: { onRemoved?(track) }
                 ) {
-                    player.play(tracks: playableTracks, source: source, startAt: track)
+                    player.play(tracks: playableTracks, source: source, startAt: track,
+                                context: context)
                 }
             }
         }
@@ -289,7 +498,7 @@ struct TrackListView: View {
 struct AddToPlaylistSheet: View {
     let track: Track
 
-    @Environment(AccountStore.self) private var account
+    @EnvironmentObject private var account: AccountStore
     @Environment(\.dismiss) private var dismiss
     @State private var newName = ""
     @State private var creating = false

@@ -1,8 +1,7 @@
 import SwiftUI
 
 @MainActor
-@Observable
-final class HomeViewModel {
+final class HomeViewModel: ObservableObject {
     /// Shared so the loaded page survives sidebar switches (no skeleton flash).
     static let shared = HomeViewModel()
 
@@ -27,13 +26,13 @@ final class HomeViewModel {
         let coverURL: String?
     }
 
-    var state: State = .idle
-    var recommendPlaylists: [PlaylistSummary] = []
-    var radarPlaylists: [RadarPlaylist] = []
-    var toplists: [ToplistItem] = []
-    var newAlbums: [AlbumSummary] = []
-    var topArtists: [ArtistSummary] = []
-    var dailyFirstCover: String?
+    @Published var state: State = .idle
+    @Published var recommendPlaylists: [PlaylistSummary] = []
+    @Published var radarPlaylists: [RadarPlaylist] = []
+    @Published var toplists: [ToplistItem] = []
+    @Published var newAlbums: [AlbumSummary] = []
+    @Published var topArtists: [ArtistSummary] = []
+    @Published var dailyFirstCover: String?
     private var loadedForLoginState: Bool?
 
     func load(loggedIn: Bool) async {
@@ -111,9 +110,9 @@ final class HomeViewModel {
 }
 
 struct HomeView: View {
-    @Environment(AccountStore.self) private var account
-    @Environment(PlayerService.self) private var player
-    @State private var model = HomeViewModel.shared
+    @EnvironmentObject private var account: AccountStore
+    @EnvironmentObject private var player: PlayerService
+    @StateObject private var model = HomeViewModel.shared
 
     private struct LoadContext: Equatable {
         let accountBootstrapped: Bool
@@ -170,7 +169,7 @@ struct HomeView: View {
             }
 
             if !model.recommendPlaylists.isEmpty {
-                Shelf(title: "推荐歌单") {
+                Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(Array(model.recommendPlaylists.prefix(12).enumerated()), id: \.element.id) { index, playlist in
                         playlistCard(playlist)
                             .staggeredAppearance(index: index, id: "home-rec-\(playlist.id)")
@@ -179,11 +178,9 @@ struct HomeView: View {
             }
 
             if !model.radarPlaylists.isEmpty {
-                Shelf(title: "雷达歌单") {
+                Shelf(title: "雷达歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.radarPlaylists) { radar in
-                        NavigationLink {
-                            PlaylistDetailView(playlistID: radar.id)
-                        } label: {
+                        NavigationLink(value: Destination.playlist(radar.id)) {
                             CoverCardBody(
                                 coverURL: radar.coverURL?.resizedImageURL(384),
                                 title: radar.title,
@@ -198,11 +195,9 @@ struct HomeView: View {
             }
 
             if !model.toplists.isEmpty {
-                Shelf(title: "排行榜", seeAll: nil) {
+                Shelf(title: "排行榜", seeAll: nil, rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.toplists) { toplist in
-                        NavigationLink {
-                            PlaylistDetailView(playlistID: toplist.id)
-                        } label: {
+                        NavigationLink(value: Destination.playlist(toplist.id)) {
                             toplistCard(toplist)
                         }
                         .buttonStyle(.plain)
@@ -211,7 +206,7 @@ struct HomeView: View {
             }
 
             if !model.newAlbums.isEmpty {
-                Shelf(title: "新碟上架") {
+                Shelf(title: "新碟上架", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.newAlbums) { album in
                         albumCard(album)
                     }
@@ -219,7 +214,7 @@ struct HomeView: View {
             }
 
             if !model.topArtists.isEmpty {
-                Shelf(title: "推荐歌手") {
+                Shelf(title: "推荐歌手", rowHeight: Theme.Layout.artistShelfHeight) {
                     ForEach(model.topArtists) { artist in
                         artistCard(artist)
                     }
@@ -239,9 +234,7 @@ struct HomeView: View {
             HStack(spacing: 16) {
                 Color.clear.frame(width: max(0, Theme.Layout.contentInset - 16), height: 1)
                 if account.isLoggedIn {
-                    NavigationLink {
-                        DailySongsView()
-                    } label: {
+                    NavigationLink(value: Destination.daily) {
                         FeatureCard(
                             title: "每日推荐",
                             subtitle: "根据你的口味生成",
@@ -282,7 +275,7 @@ struct HomeView: View {
             }
             .padding(.vertical, 6)
         }
-        .scrollClipDisabled() // hover scale must not be clipped (#11)
+        .compatScrollClipDisabled()
     }
 
     private func startHeartbeatMode() {
@@ -298,7 +291,8 @@ struct HomeView: View {
                     ToastCenter.shared.show(String(localized: "心动模式暂时不可用"))
                     return
                 }
-                player.play(tracks: tracks, source: .playlist(likedList.id))
+                player.play(tracks: tracks, source: .playlist(likedList.id),
+                            context: .heartbeat)
                 ToastCenter.shared.show(String(localized: "已开启心动模式"))
             } catch {
                 ToastCenter.shared.show(error.localizedDescription)
@@ -309,9 +303,7 @@ struct HomeView: View {
     // MARK: - Cards
 
     private func playlistCard(_ playlist: PlaylistSummary) -> some View {
-        NavigationLink {
-            PlaylistDetailView(playlistID: playlist.id)
-        } label: {
+        NavigationLink(value: Destination.playlist(playlist.id)) {
             CoverCardBody(
                 coverURL: playlist.coverURL?.resizedImageURL(384),
                 title: playlist.name,
@@ -325,9 +317,7 @@ struct HomeView: View {
     }
 
     private func albumCard(_ album: AlbumSummary) -> some View {
-        NavigationLink {
-            AlbumDetailView(albumID: album.id)
-        } label: {
+        NavigationLink(value: Destination.album(album.id)) {
             CoverCardBody(
                 coverURL: album.picUrl?.resizedImageURL(384),
                 title: album.name,
@@ -335,7 +325,8 @@ struct HomeView: View {
             ) {
                 Task {
                     if let detail = try? await NeteaseAPI.album(id: album.id) {
-                        player.play(tracks: detail.songs, source: .album(album.id))
+                        player.play(tracks: detail.songs, source: .album(album.id),
+                                    context: .album(id: album.id, name: album.name))
                     }
                 }
             }
@@ -344,9 +335,7 @@ struct HomeView: View {
     }
 
     private func artistCard(_ artist: ArtistSummary) -> some View {
-        NavigationLink {
-            ArtistDetailView(artistID: artist.id)
-        } label: {
+        NavigationLink(value: Destination.artist(artist.id)) {
             VStack(spacing: 10) {
                 CachedAsyncImage(url: artist.picUrl?.resizedImageURL(256))
                     .frame(width: 128, height: 128)
@@ -393,7 +382,8 @@ struct HomeView: View {
                 let ids = detail.playlist.trackIds.map(\.id)
                 tracks = (try? await NeteaseAPI.songDetails(ids: Array(ids.prefix(500))))?.songs ?? []
             }
-            player.play(tracks: tracks, source: .playlist(id))
+            player.play(tracks: tracks, source: .playlist(id),
+                        context: .playlist(id: id, name: detail.playlist.name))
         }
     }
 }

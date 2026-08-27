@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct PlayerBar: View {
-    @Environment(PlayerService.self) private var player
-    @Environment(AccountStore.self) private var account
+    @EnvironmentObject private var player: PlayerService
+    @EnvironmentObject private var account: AccountStore
 
     var body: some View {
         GeometryReader { proxy in
@@ -139,7 +139,7 @@ struct PlayerBar: View {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(.white)
-                        .contentTransition(.symbolEffect(.replace))
+                        .contentTransition(.opacity)
                 }
             }
         }
@@ -147,7 +147,7 @@ struct PlayerBar: View {
         .padding(.horizontal, 2)
     }
 
-    // MARK: - Right: quality / panels / volume
+    // MARK: - Right: quality / panels
 
     private func optionsSection(compact: Bool) -> some View {
         HStack(spacing: 4) {
@@ -186,7 +186,6 @@ struct PlayerBar: View {
             RoutePickerButton(diameter: 26, glyphSize: 13,
                               tint: .secondary, background: .clear)
             #endif
-            VolumeControl()
         }
     }
 
@@ -202,7 +201,6 @@ struct PlayerBar: View {
         .allowsHitTesting(false)
     }
 }
-
 // MARK: - Icon button
 
 struct PlayerIconButton: View {
@@ -248,7 +246,7 @@ struct LikeButton: View {
     let trackID: Int
     var size: CGFloat = 13
 
-    @Environment(AccountStore.self) private var account
+    @EnvironmentObject private var account: AccountStore
 
     var body: some View {
         let liked = account.isLiked(trackID)
@@ -265,7 +263,8 @@ struct LikeButton: View {
 // MARK: - Scrubber
 
 struct ScrubberLane: View {
-    @Environment(PlayerService.self) private var player
+    @EnvironmentObject private var player: PlayerService
+    @ObservedObject private var clock = PlayerService.shared.clock
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var isHovering = false
@@ -274,13 +273,13 @@ struct ScrubberLane: View {
 
     private var fraction: Double {
         guard player.duration > 0 else { return 0 }
-        let value = isDragging ? dragProgress : player.progress
+        let value = isDragging ? dragProgress : clock.progress
         return min(max(value / player.duration, 0), 1)
     }
 
     var body: some View {
         HStack(spacing: 8) {
-            timeLabel(isDragging ? dragProgress : player.progress)
+            timeLabel(isDragging ? dragProgress : clock.progress)
             track
             timeLabel(player.duration)
         }
@@ -337,62 +336,5 @@ struct ScrubberLane: View {
 
     private var thumbDiameter: CGFloat {
         isDragging ? 12 : (isHovering ? 10 : 8)
-    }
-}
-
-// MARK: - Volume
-
-struct VolumeControl: View {
-    @Environment(PlayerService.self) private var player
-    @State private var showPopover = false
-
-    var body: some View {
-        PlayerIconButton(icon: volumeIcon, size: 13) {
-            showPopover.toggle()
-        }
-        .popover(isPresented: $showPopover, arrowEdge: .top) {
-            VolumeSlider()
-                .padding(.vertical, 12)
-                .padding(.horizontal, 10)
-        }
-        .help("音量")
-    }
-
-    private var volumeIcon: String {
-        switch player.volume {
-        case 0: return "speaker.slash"
-        case ..<0.4: return "speaker.wave.1"
-        case ..<0.75: return "speaker.wave.2"
-        default: return "speaker.wave.3"
-        }
-    }
-}
-
-struct VolumeSlider: View {
-    @Environment(PlayerService.self) private var player
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        @Bindable var player = player
-        GeometryReader { geo in
-            let height = geo.size.height
-            ZStack(alignment: .bottom) {
-                Capsule()
-                    .fill(colorScheme == .dark ? Color.white.opacity(0.18) : .black.opacity(0.15))
-                    .frame(width: 4)
-                Capsule()
-                    .fill(Theme.accent)
-                    .frame(width: 4, height: max(4, height * CGFloat(player.volume)))
-            }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        player.volume = Float(min(max(1 - value.location.y / height, 0), 1))
-                    }
-            )
-        }
-        .frame(width: 22, height: 110)
     }
 }

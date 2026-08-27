@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Fork release tag (for example v0.2.2-ios.2)"
+        description: "Fork release tag (for example v0.3.8-ios.1)"
         required: true
         type: string
       marketing_version:
         description: "CFBundleShortVersionString"
         required: true
-        default: "0.2.2"
+        default: "0.3.8"
         type: string
 
 permissions:
