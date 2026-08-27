@@ -209,7 +209,9 @@ struct TrackRow: View {
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
             if let progress = downloads.progress(for: track) {
-                TrackDownloadProgressView(progress: progress)
+                TrackDownloadProgressView(progress: progress) {
+                    downloads.cancel(track)
+                }
             } else if !track.isLocal, downloadAction != .hidden, isCompact || isHovering {
                 Button {
                     if downloadAction == .removeOnly || downloads.isDownloaded(track) {
@@ -274,8 +276,9 @@ struct TrackRow: View {
         }
         if !track.isLocal {
             if downloads.isDownloading(track) {
-                Label("正在下载", systemImage: "arrow.down.circle")
-                    .disabled(true)
+                Button("取消下载", role: .destructive) {
+                    downloads.cancel(track)
+                }
             } else if downloads.isDownloaded(track) {
                 Button("删除下载", role: .destructive) {
                     downloads.remove(track)
@@ -504,26 +507,36 @@ final class SpectrumBarsView: PlatformView {
 
 private struct TrackDownloadProgressView: View {
     let progress: DownloadManager.DownloadProgress
+    let onCancel: () -> Void
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            if let fraction = progress.fractionCompleted {
-                ProgressView(value: fraction)
-                    .progressViewStyle(.linear)
-            } else {
-                ProgressView()
-                    .progressViewStyle(.linear)
-            }
+        HStack(spacing: 6) {
+            VStack(alignment: .trailing, spacing: 2) {
+                if let fraction = progress.fractionCompleted {
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                }
 
-            Text(progress.statusText)
-                .font(.system(size: 9).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                Text(progress.statusText)
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 82)
+
+            Button(action: onCancel) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.pressable)
+            .accessibilityLabel(String(localized: "取消下载"))
         }
-        .frame(width: 92)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("正在下载")
-        .accessibilityValue(progress.statusText)
+        .frame(width: 104)
+        .accessibilityElement(children: .contain)
     }
 }
 
