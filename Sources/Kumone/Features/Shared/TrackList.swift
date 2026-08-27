@@ -208,7 +208,9 @@ struct TrackRow: View {
 
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
-            if !track.isLocal, downloadAction != .hidden, isCompact || isHovering {
+            if let progress = downloads.progress(for: track) {
+                TrackDownloadProgressView(progress: progress)
+            } else if !track.isLocal, downloadAction != .hidden, isCompact || isHovering {
                 Button {
                     if downloadAction == .removeOnly || downloads.isDownloaded(track) {
                         downloads.remove(track)
@@ -497,6 +499,31 @@ final class SpectrumBarsView: PlatformView {
             bar.transform = CATransform3DMakeScale(1, scale, 1)
         }
         CATransaction.commit()
+    }
+}
+
+private struct TrackDownloadProgressView: View {
+    let progress: DownloadManager.DownloadProgress
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if let fraction = progress.fractionCompleted {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+
+            Text(progress.statusText)
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(width: 92)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("正在下载")
+        .accessibilityValue(progress.statusText)
     }
 }
 

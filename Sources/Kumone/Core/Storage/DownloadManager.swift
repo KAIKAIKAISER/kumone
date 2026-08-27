@@ -12,6 +12,7 @@ final class DownloadManager: ObservableObject {
     @Published private(set) var downloadedIDs: Set<Int> = []
     @Published private(set) var downloadingIDs: Set<Int> = []
     @Published private(set) var downloadedTracks: [DownloadedTrack] = []
+    @Published private(set) var activeProgress: [Int: DownloadProgress] = [:]
 
     struct DownloadedTrack: Identifiable {
         let track: Track
@@ -19,6 +20,36 @@ final class DownloadManager: ObservableObject {
         let fileSize: Int64
 
         var id: Int { track.id }
+    }
+
+    struct DownloadProgress: Identifiable {
+        let track: Track
+        let downloadedBytes: Int64
+        let totalBytes: Int64?
+        let speedBytesPerSecond: Double
+
+        var id: Int { track.id }
+
+        var fractionCompleted: Double? {
+            guard let totalBytes, totalBytes > 0 else { return nil }
+            return min(1, max(0, Double(downloadedBytes) / Double(totalBytes)))
+        }
+
+        var statusText: String {
+            let speed = ByteCountFormatter.string(
+                fromByteCount: Int64(max(0, speedBytesPerSecond)),
+                countStyle: .file
+            )
+            if let totalBytes, totalBytes > 0 {
+                let percent = Int((Double(downloadedBytes) / Double(totalBytes) * 100).rounded())
+                return "\(percent)% · \(speed)/s"
+            }
+            let downloaded = ByteCountFormatter.string(
+                fromByteCount: downloadedBytes,
+                countStyle: .file
+            )
+            return "\(downloaded) · \(speed)/s"
+        }
     }
 
     private struct ResolvedSource {
@@ -59,6 +90,10 @@ final class DownloadManager: ObservableObject {
         downloadingIDs.contains(track.id)
     }
 
+    func progress(for track: Track) -> DownloadProgress? {
+        activeProgress[track.id]
+    }
+
     func fileURL(for track: Track) -> URL? {
         guard !track.isLocal,
               let url = downloadedFiles[track.id],
@@ -80,6 +115,12 @@ final class DownloadManager: ObservableObject {
         else { return }
 
         downloadingIDs.insert(track.id)
+        activeProgress[track.id] = DownloadProgress(
+            track: track,
+            downloadedBytes: 0,
+            totalBytes: nil,
+            speedBytesPerSecond: 0
+        )
         Task { [weak self] in
             await self?.performDownload(track)
         }
@@ -106,16 +147,69 @@ final class DownloadManager: ObservableObject {
     }
 
     private func performDownload(_ track: Track) async {
-        defer { downloadingIDs.remove(track.id) }
+        defer {
+            downloadingIDs.remove(track.id)
+            activeProgress.removeValue(forKey: track.id)
+        }
 
         do {
             let source = try await resolveSource(for: track)
-            let (temporaryURL, response) = try await URLSession.shared.download(from: source.url)
+            let temporaryURL = fileManager.temporaryDirectory
+                .appendingPathComponent("Kumone-\(track.id)-\(UUID().uuidString).download")
+            let (bytes, response) = try await URLSession.shared.bytes(from: source.url)
             guard let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode)
             else {
                 throw DownloadError.invalidResponse
             }
+
+            let totalBytes = response.expectedContentLength > 0 ? response.expectedContentLength : nil
+            fileManager.createFile(atPath: temporaryURL.path, contents: nil)
+            let fileHandle = try FileHandle(forWritingTo: temporaryURL)
+            var downloadedBytes: Int64 = 0
+            var buffer = Data()
+            buffer.reserveCapacity(64 * 1024)
+            var lastUpdate = Date()
+            var lastBytes: Int64 = 0
+            var smoothedSpeed = 0.0
+
+            do {
+                for try await byte in bytes {
+                    buffer.append(byte)
+                    if buffer.count >= 64 * 1024 {
+                        try fileHandle.write(contentsOf: buffer)
+                        downloadedBytes += Int64(buffer.count)
+                        buffer.removeAll(keepingCapacity: true)
+                        updateProgress(
+                            for: track,
+                            downloadedBytes: downloadedBytes,
+                            totalBytes: totalBytes,
+                            lastUpdate: &lastUpdate,
+                            lastBytes: &lastBytes,
+                            smoothedSpeed: &smoothedSpeed
+                        )
+                    }
+                }
+                if !buffer.isEmpty {
+                    try fileHandle.write(contentsOf: buffer)
+                    downloadedBytes += Int64(buffer.count)
+                }
+                try fileHandle.close()
+            } catch {
+                try? fileHandle.close()
+                try? fileManager.removeItem(at: temporaryURL)
+                throw error
+            }
+
+            updateProgress(
+                for: track,
+                downloadedBytes: downloadedBytes,
+                totalBytes: totalBytes,
+                lastUpdate: &lastUpdate,
+                lastBytes: &lastBytes,
+                smoothedSpeed: &smoothedSpeed,
+                force: true
+            )
 
             let directory = Self.downloadDirectory
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -140,10 +234,12 @@ final class DownloadManager: ObservableObject {
     }
 
     private func resolveSource(for track: Track) async throws -> ResolvedSource {
-        let quality = SettingsManager.shared.audioQuality.rawValue
-        var data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality).first
-        if data?.url == nil, quality != AudioQuality.standard.rawValue {
-            data = try? await NeteaseAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+        // Downloads start at the highest quality and fall back only when the
+        // account or the song cannot provide that level.
+        var data: SongURLData?
+        for quality in AudioQuality.allCases.reversed() {
+            data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality.rawValue).first
+            if data?.url != nil { break }
         }
 
         if let data, let urlString = data.url,
@@ -159,6 +255,36 @@ final class DownloadManager: ObservableObject {
             return ResolvedSource(url: unblocked.url, fileExtension: "mp3")
         }
         throw DownloadError.sourceUnavailable
+    }
+
+    private func updateProgress(
+        for track: Track,
+        downloadedBytes: Int64,
+        totalBytes: Int64?,
+        lastUpdate: inout Date,
+        lastBytes: inout Int64,
+        smoothedSpeed: inout Double,
+        force: Bool = false
+    ) {
+        let now = Date()
+        let elapsed = now.timeIntervalSince(lastUpdate)
+        guard force || elapsed >= 0.15 else { return }
+
+        let delta = max(0, downloadedBytes - lastBytes)
+        let instantSpeed = elapsed > 0 ? Double(delta) / elapsed : 0
+        if instantSpeed > 0 {
+            smoothedSpeed = smoothedSpeed == 0
+                ? instantSpeed
+                : smoothedSpeed * 0.7 + instantSpeed * 0.3
+        }
+        activeProgress[track.id] = DownloadProgress(
+            track: track,
+            downloadedBytes: downloadedBytes,
+            totalBytes: totalBytes,
+            speedBytesPerSecond: smoothedSpeed
+        )
+        lastUpdate = now
+        lastBytes = downloadedBytes
     }
 
     private static func fileExtension(for data: SongURLData, url: URL) -> String {
