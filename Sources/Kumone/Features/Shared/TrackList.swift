@@ -26,6 +26,7 @@ struct TrackRow: View {
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @ObservedObject private var downloads = DownloadManager.shared
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
@@ -197,6 +198,32 @@ struct TrackRow: View {
 
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
+            if !track.isLocal, isCompact || isHovering {
+                Button {
+                    if downloads.isDownloaded(track) {
+                        downloads.remove(track)
+                    } else {
+                        downloads.download(track)
+                    }
+                } label: {
+                    if downloads.isDownloading(track) {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: downloads.isDownloaded(track)
+                              ? "arrow.down.circle.fill"
+                              : "arrow.down.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(downloads.isDownloaded(track) ? Theme.accent : .secondary)
+                    }
+                }
+                .buttonStyle(.pressable)
+                .disabled(downloads.isDownloading(track))
+                .accessibilityLabel(downloads.isDownloaded(track)
+                                    ? String(localized: "删除下载")
+                                    : String(localized: "下载歌曲"))
+            }
+
             let liked = account.isLiked(track.id)
             Button {
                 Task { await account.toggleLike(trackID: track.id) }
@@ -228,6 +255,20 @@ struct TrackRow: View {
         }
         Button("收藏到歌单…") {
             showAddToPlaylist = true
+        }
+        if !track.isLocal {
+            if downloads.isDownloading(track) {
+                Label("正在下载", systemImage: "arrow.down.circle")
+                    .disabled(true)
+            } else if downloads.isDownloaded(track) {
+                Button("删除下载", role: .destructive) {
+                    downloads.remove(track)
+                }
+            } else {
+                Button("下载歌曲") {
+                    downloads.download(track)
+                }
+            }
         }
         if let pid = removableFromPlaylistID {
             Button("从歌单中删除", role: .destructive) {

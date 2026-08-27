@@ -17,6 +17,10 @@ private enum NowPlayingChromeMetrics {
 /// Immersive full-window now-playing page: artwork-tinted gradient backdrop,
 /// large artwork on the left, big synced lyrics on the right.
 struct NowPlayingView: View {
+    private struct AlbumSelection: Identifiable {
+        let id: Int
+    }
+
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
     @EnvironmentObject private var account: AccountStore
@@ -33,6 +37,7 @@ struct NowPlayingView: View {
     @State private var resumeTask: Task<Void, Never>?
     @State private var showLyricsOnMobile = false
     @State private var selectedArtist: ArtistRef?
+    @State private var selectedAlbum: AlbumSelection?
     #if os(iOS)
     @State private var showQueueOnMobile = false
     #endif
@@ -139,6 +144,27 @@ struct NowPlayingView: View {
                         }
                         #endif
                 }
+            }
+        }
+        .sheet(item: $selectedAlbum) { album in
+            NavigationStack {
+                AlbumDetailView(albumID: album.id)
+                    .appDestinations()
+                    .toolbar {
+                        #if os(iOS)
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") {
+                                selectedAlbum = nil
+                            }
+                        }
+                        #else
+                        ToolbarItem {
+                            Button("完成") {
+                                selectedAlbum = nil
+                            }
+                        }
+                        #endif
+                    }
             }
         }
         #if os(iOS)
@@ -285,7 +311,7 @@ struct NowPlayingView: View {
                     )
             } else {
                 VStack(spacing: 20) {
-                    artworkView(size: artworkDim)
+                    artworkButton(size: artworkDim)
                     trackMetaView
                     MiniLyricsView {
                         withAnimation(AppAnimation.standard) {
@@ -361,13 +387,16 @@ struct NowPlayingView: View {
                         ? size.width / 2
                         : compactFrame.midX
 
-                    immersiveArtworkSurface(isExpanded: showsExpandedArtwork)
-                        .frame(width: targetFrame.width, height: targetFrame.height)
-                        .position(x: targetCenterX, y: targetFrame.midY)
-                        .accessibilityIdentifier("immersiveArtwork")
+                    Button(action: openCurrentAlbum) {
+                        immersiveArtworkSurface(isExpanded: showsExpandedArtwork)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: targetFrame.width, height: targetFrame.height)
+                    .position(x: targetCenterX, y: targetFrame.midY)
+                    .accessibilityIdentifier("immersiveArtwork")
+                    .accessibilityLabel("查看专辑")
                 }
             }
-            .allowsHitTesting(false)
         }
     }
 
@@ -474,13 +503,11 @@ struct NowPlayingView: View {
                     .contentShape(Rectangle())
                     .onTapGesture(perform: toggleMinimalLyrics)
 
-                artworkView(size: artworkDimension)
+                artworkButton(size: artworkDimension)
                     .contentShape(Rectangle())
-                    .onTapGesture(perform: toggleMinimalLyrics)
                     .accessibilityIdentifier("immersiveArtwork")
-                    .accessibilityLabel("显示歌词")
+                    .accessibilityLabel("查看专辑")
                     .accessibilityAddTraits(.isButton)
-                    .accessibilityAction { toggleMinimalLyrics() }
                     .opacity(showLyricsOnMobile ? 0 : 1)
                     .allowsHitTesting(!showLyricsOnMobile)
 
@@ -583,6 +610,20 @@ struct NowPlayingView: View {
         .animation(AppAnimation.bouncy, value: player.isPlaying)
     }
 
+    private func artworkButton(size: CGFloat) -> some View {
+        Button(action: openCurrentAlbum) {
+            artworkView(size: size)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("查看专辑")
+        .accessibilityHint("打开当前歌曲所属专辑")
+    }
+
+    private func openCurrentAlbum() {
+        guard let albumID = player.currentTrack?.album.id, albumID > 0 else { return }
+        selectedAlbum = AlbumSelection(id: albumID)
+    }
+
     private var trackMetaView: some View {
         VStack(spacing: 5) {
             HStack(spacing: 8) {
@@ -646,7 +687,7 @@ struct NowPlayingView: View {
         VStack(spacing: 26) {
             Spacer()
 
-            artworkView(size: artworkSize)
+            artworkButton(size: artworkSize)
             trackMetaView
 
             VStack(spacing: 14) {
