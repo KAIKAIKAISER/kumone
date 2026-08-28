@@ -38,19 +38,12 @@
             ReferencedContainer = "container:KumoneIOS.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
-      <Testables>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "7F3FA2EAD87A1580A6CD3880"
-               BuildableName = "KumoneIOSUITests.xctest"
-               BlueprintName = "KumoneIOSUITests"
-               ReferencedContainer = "container:KumoneIOS.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-      </Testables>
+      <TestPlans>
+         <TestPlanReference
+            reference = "container:KumoneIOS/KumoneIOS.xctestplan"
+            default = "YES">
+         </TestPlanReference>
+      </TestPlans>
       <CommandLineArguments>
       </CommandLineArguments>
    </TestAction>
