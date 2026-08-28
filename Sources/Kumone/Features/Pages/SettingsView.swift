@@ -3,9 +3,9 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsManager
     @EnvironmentObject private var account: AccountStore
-    @ObservedObject private var downloads = DownloadManager.shared
     @State private var cacheSize: String = String(localized: "计算中…")
-    @State private var showClearDownloadsConfirmation = false
+    @State private var playbackCacheSize: String = String(localized: "计算中…")
+    @State private var showClearPlaybackCacheConfirmation = false
 
     var body: some View {
         Form {
@@ -56,9 +56,9 @@ struct SettingsView: View {
                 Button("清除缓存") {
                     clearCache()
                 }
-                LabeledContent("歌曲缓存", value: downloadCacheSize)
-                Button("清理歌曲缓存", role: .destructive) {
-                    showClearDownloadsConfirmation = true
+                LabeledContent("在线播放缓存", value: playbackCacheSize)
+                Button("清理在线播放缓存", role: .destructive) {
+                    showClearPlaybackCacheConfirmation = true
                 }
             }
 
@@ -100,32 +100,30 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .confirmationDialog(
-            "清理歌曲缓存？",
-            isPresented: $showClearDownloadsConfirmation,
+            "清理在线播放缓存？",
+            isPresented: $showClearPlaybackCacheConfirmation,
             titleVisibility: .visible
         ) {
-            Button("清理歌曲缓存", role: .destructive) {
-                downloads.removeAll()
-                ToastCenter.shared.show(String(localized: "歌曲缓存已清理"))
+            Button("清理在线播放缓存", role: .destructive) {
+                clearPlaybackCache()
             }
             Button("取消", role: .cancel) {}
         }
         #if os(macOS)
         .frame(width: 440, height: 480)
         #endif
-        .task { updateCacheSize() }
+        .task {
+            updateCacheSize()
+            let bytes = await AudioPlaybackCache.shared.size()
+            playbackCacheSize = ByteCountFormatter.string(
+                fromByteCount: bytes,
+                countStyle: .file
+            )
+        }
     }
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
-    }
-
-    private var downloadCacheSize: String {
-        let size = ByteCountFormatter.string(
-            fromByteCount: downloads.downloadedFileSize,
-            countStyle: .file
-        )
-        return String(format: String(localized: "已下载 %lld 首 · %@"), downloads.downloadedTracks.count, size)
     }
 
     private var cacheDirectory: URL {
@@ -158,6 +156,14 @@ struct SettingsView: View {
                 cacheSize = String(localized: "0 字节")
                 ToastCenter.shared.show(String(localized: "缓存已清除"))
             }
+        }
+    }
+
+    private func clearPlaybackCache() {
+        Task { @MainActor in
+            await AudioPlaybackCache.shared.clear()
+            playbackCacheSize = String(localized: "0 字节")
+            ToastCenter.shared.show(String(localized: "在线播放缓存已清理"))
         }
     }
 }

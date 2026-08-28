@@ -682,8 +682,29 @@ final class PlayerService: ObservableObject {
             resolvedDuration = nil
         }
 
+        var playbackURL = url
+        if data?.freeTrialInfo == nil {
+            let cacheVariant = data?.level
+                ?? unblockSource.map { "unblock-\($0)" }
+                ?? "online"
+            let cacheExtension = data?.type ?? url.pathExtension
+            if let cachedURL = await AudioPlaybackCache.shared.cachedFile(
+                for: track.id, variant: cacheVariant, fileExtension: cacheExtension
+            ) {
+                playbackURL = cachedURL
+            } else {
+                await AudioPlaybackCache.shared.cache(
+                    sourceURL: url,
+                    for: track.id,
+                    variant: cacheVariant,
+                    fileExtension: cacheExtension
+                )
+            }
+            guard generation == resolveGeneration else { return }
+        }
+
         await installPlayerItem(
-            url: url,
+            url: playbackURL,
             track: track,
             resolvedDuration: resolvedDuration,
             generation: generation
