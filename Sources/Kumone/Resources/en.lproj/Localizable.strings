@@ -137,6 +137,9 @@
 "已下载 %lld 首 · %@" = "%lld songs · %@";
 "清空下载" = "Clear downloads";
 "清空下载歌曲？" = "Clear downloaded songs?";
+"清理歌曲缓存" = "Clear song cache";
+"清理歌曲缓存？" = "Clear song cache?";
+"歌曲缓存已清理" = "Song cache cleared";
 "下载中" = "Downloading";
 "正在下载 %lld 首" = "Downloading %lld songs";
 "歌曲下载完成" = "Song downloaded";

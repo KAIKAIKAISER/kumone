@@ -17,6 +17,7 @@ private final class DownloadTaskDelegate: NSObject, URLSessionDownloadDelegate {
     private var continuation: CheckedContinuation<DownloadTaskResult, Error>?
     private var finishedURL: URL?
     private var failure: Error?
+    private var removesDestinationOnDeinit = true
 
     init(destinationURL: URL, onProgress: @escaping (Int64, Int64) -> Void) {
         self.destinationURL = destinationURL
@@ -24,7 +25,9 @@ private final class DownloadTaskDelegate: NSObject, URLSessionDownloadDelegate {
     }
 
     deinit {
-        try? FileManager.default.removeItem(at: destinationURL)
+        if removesDestinationOnDeinit {
+            try? FileManager.default.removeItem(at: destinationURL)
+        }
     }
 
     func start(session: URLSession, url: URL) async throws -> DownloadTaskResult {
@@ -38,6 +41,10 @@ private final class DownloadTaskDelegate: NSObject, URLSessionDownloadDelegate {
 
     func cancel() {
         downloadTask?.cancel()
+    }
+
+    func keepDestination() {
+        removesDestinationOnDeinit = false
     }
 
     func urlSession(
@@ -270,10 +277,12 @@ final class DownloadManager: ObservableObject {
             }
         }
 
+        var temporaryURL: URL?
         do {
             try Task.checkCancellation()
             let source = try await resolveSource(for: track)
             let result = try await downloadSource(from: source.url, for: track, token: token)
+            temporaryURL = result.url
             try Task.checkCancellation()
             guard let http = result.response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode)
@@ -281,7 +290,10 @@ final class DownloadManager: ObservableObject {
                 throw DownloadError.invalidResponse
             }
 
-            guard downloadTokens[track.id] == token else { return }
+            guard downloadTokens[track.id] == token else {
+                try? fileManager.removeItem(at: result.url)
+                return
+            }
 
             let directory = Self.downloadDirectory
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -293,6 +305,7 @@ final class DownloadManager: ObservableObject {
             }
             try? fileManager.removeItem(at: destination)
             try fileManager.moveItem(at: result.url, to: destination)
+            temporaryURL = nil
 
             downloadedFiles[track.id] = destination
             downloadedTrackMetadata[track.id] = track
@@ -301,6 +314,9 @@ final class DownloadManager: ObservableObject {
             saveIndex()
             ToastCenter.shared.show(String(localized: "歌曲下载完成"))
         } catch {
+            if let temporaryURL {
+                try? fileManager.removeItem(at: temporaryURL)
+            }
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 return
             }
@@ -328,11 +344,15 @@ final class DownloadManager: ObservableObject {
         let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
 
-        return try await withTaskCancellationHandler(operation: {
+        let result = try await withTaskCancellationHandler(operation: {
             try await delegate.start(session: session, url: url)
         }, onCancel: {
             delegate.cancel()
         })
+        // The delegate normally removes its staging file when it is released.
+        // The caller still needs that file for the final move into Downloads.
+        delegate.keepDestination()
+        return result
     }
 
     private func resolveSource(for track: Track) async throws -> ResolvedSource {
