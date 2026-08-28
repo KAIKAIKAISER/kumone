@@ -44,7 +44,7 @@ struct DownloadsView: View {
         }
         .navigationTitle("下载管理")
         .toolbar {
-            if !downloads.downloadedTracks.isEmpty {
+            if !tracks.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showClearConfirmation = true
