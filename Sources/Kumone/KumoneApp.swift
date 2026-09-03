@@ -12,7 +12,7 @@ public struct KumoneApp: App {
     public init() {}
 
     public var body: some Scene {
-        WindowGroup("网易云小乐", id: "main") {
+        Window("网易云小乐", id: "main") {
             MainWindow()
                 .environmentObject(player)
                 .environmentObject(account)
@@ -90,6 +90,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Installed by the SwiftUI main scene. Calling it recreates the scene
     /// when its NSWindow was released after the user closed the last window.
     var openMainWindow: (() -> Void)?
+    /// The single main window, captured by `MainWindowConfigurator`. Its close
+    /// interceptor hides (orders out) the window instead of destroying the
+    /// single-instance `Window` scene, so we can always bring it back here.
+    weak var mainWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
@@ -128,19 +132,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows _: Bool) -> Bool {
-        // `hasVisibleWindows` includes helper windows such as desktop lyrics.
-        // If the WindowGroup has already released its NSWindow, use the
-        // SwiftUI scene action below to create it again.
-        if let mainWindow = sender.windows.first(where: {
+        // `hasVisibleWindows` is unreliable here: helper windows such as the
+        // desktop-lyrics overlay make it `true` even when the main window is
+        // gone, so decide based on the main window itself.
+        //
+        // `MainWindowConfigurator` keeps the main window alive on close
+        // (orders it out rather than destroying the scene), so it is normally
+        // still around — just hidden and/or miniaturised, and possibly behind
+        // other windows. Restore and front it. Only if it truly no longer
+        // exists do we ask SwiftUI to recreate the scene.
+        let target = mainWindow ?? sender.windows.first {
             $0.styleMask.contains(.titled) && $0.canBecomeMain
-        }), !mainWindow.isVisible {
-            mainWindow.makeKeyAndOrderFront(nil)
-        } else if !sender.windows.contains(where: {
-            $0.isVisible && $0.styleMask.contains(.titled) && $0.canBecomeMain
-        }) {
+        }
+        if let window = target {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
             openMainWindow?()
         }
-        return true
+        // Fully handled above; returning `false` prevents AppKit from also
+        // enqueuing another SwiftUI scene request (which re-created #58's
+        // duplicate window).
+        return false
     }
 }
 #endif

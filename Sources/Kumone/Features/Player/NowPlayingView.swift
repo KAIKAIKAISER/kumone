@@ -18,9 +18,7 @@ struct NowPlayingView: View {
     @State private var isUserScrolling = false
     @State private var resumeTask: Task<Void, Never>?
     @State private var showLyricsOnMobile = false
-    #if os(iOS)
     @State private var showQueueOnMobile = false
-    #endif
 
     var body: some View {
         GeometryReader { geo in
@@ -104,7 +102,7 @@ struct NowPlayingView: View {
             showQueueOnMobile = false
         }
         .onChange(of: player.currentTrack?.id) { _ in
-            if settings.nowPlayingMode == .minimal {
+            if settings.nowPlayingMode == .minimal || settings.nowPlayingMode == .vinyl {
                 showLyricsOnMobile = false
             }
         }
@@ -197,6 +195,11 @@ struct NowPlayingView: View {
         // Everything below the artwork needs ~300pt; shrink the artwork on
         // short displays (iPhone landscape) instead of clipping it.
         let artworkSize = max(120, min(340, size.width * 0.32, size.height - 300))
+        // Cap the two-column band and centre it. Spreading each column to
+        // `.infinity` across an ultra-wide display (iPad landscape, ~1368pt)
+        // left the left column's content floating in an oversized half and a
+        // wide blank gutter on the right (#62).
+        let maxBandWidth: CGFloat = hasLyricsColumn ? 1040 : 560
         return HStack(spacing: 0) {
             leftColumn(artworkSize: artworkSize)
                 .frame(maxWidth: .infinity)
@@ -205,6 +208,8 @@ struct NowPlayingView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+        .frame(maxWidth: maxBandWidth)
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 48)
         .padding(.vertical, size.height < 500 ? 24 : 40)
     }
@@ -213,6 +218,8 @@ struct NowPlayingView: View {
     private func compactLayout(size: CGSize) -> some View {
         #if os(iOS)
         switch settings.nowPlayingMode {
+        case .vinyl:
+            vinylCompactLayout(size: size)
         case .classic:
             classicCompactLayout(size: size)
         case .immersive:
@@ -221,8 +228,112 @@ struct NowPlayingView: View {
             minimalCompactLayout(size: size)
         }
         #else
-        classicCompactLayout(size: size)
+        switch settings.nowPlayingMode {
+        case .vinyl:
+            vinylCompactLayout(size: size)
+        default:
+            classicCompactLayout(size: size)
+        }
         #endif
+    }
+
+    private func vinylCompactLayout(size: CGSize) -> some View {
+        let discDimension = min(size.width - 64, size.height * 0.42, 320)
+        let showsVinyl = !showLyricsOnMobile && !showQueueOnMobile
+
+        return VStack(spacing: 0) {
+            #if os(iOS)
+            Color.clear.frame(
+                height: NowPlayingPresentationMetrics.immersiveHeaderTopInset
+            )
+
+            CompactTrackHeader(showsExpandedArtwork: showsVinyl)
+                .padding(.bottom, 10)
+            #else
+            Spacer().frame(height: 30)
+            trackMetaView
+                .padding(.bottom, 10)
+            #endif
+
+            ZStack {
+                if showsVinyl {
+                    VStack(spacing: 12) {
+                        Spacer(minLength: 4)
+
+                        VinylTurntableView(
+                            artworkImage: artworkImage,
+                            isPlaying: player.isPlaying,
+                            trackId: player.currentTrack?.id,
+                            size: discDimension,
+                            onTap: {
+                                withAnimation(AppAnimation.standard) {
+                                    showLyricsOnMobile = true
+                                }
+                            },
+                            onNextTrack: {
+                                player.next()
+                            },
+                            onPreviousTrack: {
+                                player.previous()
+                            }
+                        )
+                        .accessibilityIdentifier("vinylTurntable")
+
+                        MiniLyricsView(onOpen: {
+                            withAnimation(AppAnimation.standard) {
+                                showLyricsOnMobile = true
+                            }
+                        })
+                        .frame(maxWidth: .infinity, maxHeight: 70)
+
+                        Spacer(minLength: 0)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                } else if showQueueOnMobile {
+                    #if os(iOS)
+                    CompactQueueContent()
+                        .transition(.opacity)
+                    #else
+                    lyricsColumn
+                        .transition(.opacity)
+                    #endif
+                } else {
+                    #if os(iOS)
+                    IOSImmersiveLyricsColumn()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(AppAnimation.standard) {
+                                showLyricsOnMobile = false
+                            }
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 1.05)))
+                    #else
+                    lyricsColumn
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(AppAnimation.standard) {
+                                showLyricsOnMobile = false
+                            }
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 1.05)))
+                    #endif
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            #if os(iOS)
+            immersiveControls
+            #else
+            VStack(spacing: 12) {
+                NowPlayingScrubber()
+                    .padding(.horizontal, 24)
+                controls
+            }
+            .padding(.bottom, 24)
+            #endif
+        }
+        .frame(width: max(size.width - 64, 0))
+        .padding(.horizontal, 32)
     }
 
     private func classicCompactLayout(size: CGSize) -> some View {
@@ -266,8 +377,11 @@ struct NowPlayingView: View {
                 height: NowPlayingPresentationMetrics.immersiveHeaderTopInset
             )
 
-            CompactTrackHeader(showsExpandedArtwork: showsExpandedArtwork)
-                .padding(.bottom, 14)
+            CompactTrackHeader(
+                showsExpandedArtwork: showsExpandedArtwork,
+                onTapArtwork: collapseImmersiveArtwork
+            )
+            .padding(.bottom, 14)
 
             ZStack {
                 immersiveArtworkContent(artworkDimension: artworkDimension)
@@ -388,6 +502,17 @@ struct NowPlayingView: View {
         withAnimation(ImmersiveArtworkTransition.animation) {
             showQueueOnMobile = false
             showLyricsOnMobile = true
+        }
+    }
+
+    /// Tapping the top-left cover while lyrics/queue are up returns to the
+    /// expanded artwork — the Apple Music gesture requested in #50. Idempotent,
+    /// so a tap while already expanded is a harmless no-op.
+    private func collapseImmersiveArtwork() {
+        guard showLyricsOnMobile || showQueueOnMobile else { return }
+        withAnimation(ImmersiveArtworkTransition.animation) {
+            showLyricsOnMobile = false
+            showQueueOnMobile = false
         }
     }
 
@@ -548,7 +673,25 @@ struct NowPlayingView: View {
         VStack(spacing: 26) {
             Spacer()
 
-            artworkView(size: artworkSize)
+            if settings.nowPlayingMode == .vinyl {
+                VinylTurntableView(
+                    artworkImage: artworkImage,
+                    isPlaying: player.isPlaying,
+                    trackId: player.currentTrack?.id,
+                    size: artworkSize,
+                    onTap: {
+                        player.togglePlayPause()
+                    },
+                    onNextTrack: {
+                        player.next()
+                    },
+                    onPreviousTrack: {
+                        player.previous()
+                    }
+                )
+            } else {
+                artworkView(size: artworkSize)
+            }
             trackMetaView
 
             VStack(spacing: 14) {
@@ -739,14 +882,14 @@ struct NowPlayingView: View {
             player.seek(to: line.time)
         } label: {
             VStack(alignment: .leading, spacing: 5) {
-                if settings.showLyricsRomaji, let romaji = line.romaji {
+                if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
                     Text(romaji)
                         .font(.system(size: isActive ? 15 : 13, weight: .medium))
                         .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
                 }
                 LyricMainText(
                     line: line, isActive: isActive,
-                    font: .system(size: isActive ? 26 : 20, weight: isActive ? .bold : .semibold),
+                    size: isActive ? 26 : 20, weight: isActive ? .bold : .semibold,
                     verbatim: settings.verbatimLyrics
                 )
                 if settings.showLyricsTranslation, let translation = line.translation {
@@ -770,10 +913,14 @@ struct NowPlayingView: View {
 /// The main lyric line. Renders karaoke-style per-character highlighting from
 /// verbatim (`yrc`) timings, driven live by the player, when the line is active
 /// and verbatim data exists; otherwise a plain line.
+///
+/// Whether the line carries furigana is `LyricText`'s decision; the wipe is
+/// handed down as per-character opacity so it reads the same either way.
 struct LyricMainText: View {
     let line: LyricLine
     let isActive: Bool
-    let font: Font
+    let size: CGFloat
+    let weight: Font.Weight
     let verbatim: Bool
     var inactiveOpacity: Double = 0.45
 
@@ -782,32 +929,40 @@ struct LyricMainText: View {
     var body: some View {
         if isActive, verbatim, let words = line.words, !words.isEmpty {
             TimelineView(.animation(paused: !player.isPlaying)) { _ in
-                karaoke(words, at: player.livePlaybackTime).font(font)
+                LyricText(
+                    line: line, size: size, weight: weight, color: .white,
+                    alphas: Self.alphas(for: line, words: words, at: player.livePlaybackTime)
+                )
             }
         } else {
-            Text(line.text.isEmpty ? "♪" : line.text)
-                .font(font)
-                .foregroundStyle(.white.opacity(isActive ? 1 : inactiveOpacity))
+            LyricText(
+                line: line, size: size, weight: weight,
+                color: .white.opacity(isActive ? 1 : inactiveOpacity)
+            )
         }
     }
 
-    /// One concatenated `Text` (so it wraps) with per-character opacity: sung
-    /// characters are bright, the current one fades in, unsung stay dim.
-    private func karaoke(_ words: [LyricWord], at time: TimeInterval) -> Text {
+    /// One opacity per character of `line.text`: sung characters are bright,
+    /// the current one fades in, unsung stay dim.
+    static func alphas(for line: LyricLine, words: [LyricWord], at time: TimeInterval) -> [Double] {
         let unsung = 0.28
-        var out = Text(verbatim: "")
+        var out: [Double] = []
         for word in words {
             let chars = Array(word.text)
             let per = chars.isEmpty ? word.duration : word.duration / Double(chars.count)
-            for (i, ch) in chars.enumerated() {
-                let charStart = word.start + per * Double(i)
+            for index in chars.indices {
+                let charStart = word.start + per * Double(index)
                 let frac = per > 0 ? min(max((time - charStart) / per, 0), 1)
                                    : (time >= charStart ? 1 : 0)
-                let alpha = unsung + (1 - unsung) * frac
-                out = out + Text(verbatim: String(ch)).foregroundColor(.white.opacity(alpha))
+                out.append(unsung + (1 - unsung) * frac)
             }
         }
-        return out
+        // `line.text` is the words joined and *then* trimmed, so drop the
+        // opacities for whitespace the line no longer starts with.
+        let joined = words.map(\.text).joined()
+        guard joined.count != line.text.count else { return out }
+        let leading = joined.count - joined.drop(while: \.isWhitespace).count
+        return Array(out.dropFirst(leading).prefix(line.text.count))
     }
 }
 
@@ -923,7 +1078,7 @@ private struct IOSImmersiveLyricsColumn: View {
             player.seek(to: line.time)
         } label: {
             VStack(alignment: .leading, spacing: 5) {
-                if settings.showLyricsRomaji, let romaji = line.romaji {
+                if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
                     Text(romaji)
                         .font(.system(size: isActive ? 15 : 13, weight: .medium))
                         .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
@@ -931,7 +1086,7 @@ private struct IOSImmersiveLyricsColumn: View {
 
                 LyricMainText(
                     line: line, isActive: isActive,
-                    font: .system(size: 27, weight: isActive ? .bold : .semibold),
+                    size: 27, weight: isActive ? .bold : .semibold,
                     verbatim: settings.verbatimLyrics
                 )
 
@@ -991,6 +1146,10 @@ private struct CompactTrackHeader: View {
     @State private var showAddToPlaylist = false
 
     let showsExpandedArtwork: Bool
+    /// Tap handler for the compact cover (used to collapse lyrics back to
+    /// artwork). The real image floats above this placeholder with hit-testing
+    /// disabled, so taps land here.
+    var onTapArtwork: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: ImmersiveArtworkTransition.compactHeaderSpacing) {
@@ -1003,6 +1162,8 @@ private struct CompactTrackHeader: View {
                     key: ImmersiveArtworkFramePreferenceKey.self,
                     value: .bounds
                 ) { [.compact: $0] }
+                .contentShape(Rectangle())
+                .onTapGesture { onTapArtwork?() }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -1653,7 +1814,7 @@ private struct IOSMinimalLyricsColumn: View {
     ) -> some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 3) {
-                if settings.showLyricsRomaji, let romaji = line.romaji {
+                if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
                     Text(romaji)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
@@ -1663,7 +1824,7 @@ private struct IOSMinimalLyricsColumn: View {
 
                 LyricMainText(
                     line: line, isActive: isActive,
-                    font: .system(size: 17, weight: .bold),
+                    size: 17, weight: .bold,
                     verbatim: settings.verbatimLyrics
                 )
                     .fixedSize(horizontal: false, vertical: true)
