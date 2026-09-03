@@ -6,6 +6,25 @@
 section the English bullets come first, followed by their Simplified Chinese
 counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单行。
 
+## Unreleased
+
+### Added / 新增
+
+- **iOS**: CarPlay Now Playing gains a working Up Next button — tapping it pushes the live playback queue (current track pinned on top, up to 300 upcoming rows), and picking a row jumps straight to that track. Outside FM mode the button row also gains 随机 and 循环 controls whose icons track `shuffleEnabled` / `repeatMode`, and the album-artist button opens the current track's album (falling back to its first artist for cloud-disk tracks with no album).
+- **iOS**：CarPlay Now Playing 的「播放队列」按钮现在可用——点击弹出实时播放队列（当前曲目置顶，最多 300 条待播），点任意一行直接跳转播放。非 FM 模式下按钮区新增 随机 / 循环 控件，图标跟随 `shuffleEnabled` 与 `repeatMode` 变化；专辑歌手按钮可跳转当前曲目的专辑（云盘歌曲等无专辑信息时回退到第一位歌手）。
+- **Build**: `make configure` / `make configure-carplay` now select which capabilities the iOS build ships with, plus `make build` / `test` / `app` / `project` wrappers. Run `make` for the list.
+- **Build**：新增 `make configure` / `make configure-carplay` 切换 iOS 构建包含的能力，另有 `make build` / `test` / `app` / `project` 等封装。执行 `make` 查看全部目标。
+
+### Changed / 变更
+
+- **iOS**: CarPlay is now excluded from the default build entirely, not just left unsigned — `UISupportsCarPlay` and the `CPTemplateApplicationSceneSessionRoleApplication` scene declaration have moved out of `ios/Config/Info.plist` and are injected, together with the `com.apple.developer.carplay-audio` entitlement, only by `make configure-carplay`. The overlay is written to untracked files and never touches the Xcode project, so enabling CarPlay leaves the working tree clean. Replaces the previous "uncomment `KumoneIOS.entitlements.example` by hand" flow.
+- **iOS**：CarPlay 现在从默认构建中完全移除，而不只是不签名——`UISupportsCarPlay` 与 `CPTemplateApplicationSceneSessionRoleApplication` scene 声明已移出 `ios/Config/Info.plist`，与 `com.apple.developer.carplay-audio` entitlement 一起，仅由 `make configure-carplay` 注入。覆盖文件均不纳入 git 且完全不改动 Xcode 工程，开启 CarPlay 后工作区依然干净。取代原先手动取消注释 `KumoneIOS.entitlements.example` 的流程。
+
+### Fixed / 修复
+
+- **iOS**: `ios/Config/Info.plist` declared `UIApplicationSceneManifest` twice, so one of the two CarPlay scene configurations was silently discarded.
+- **iOS**：`ios/Config/Info.plist` 中 `UIApplicationSceneManifest` 被声明了两次，其中一份 CarPlay scene 配置会被静默丢弃。
+
 ## 0.3.15 - 2026-09-01
 
 ### Added / 新增

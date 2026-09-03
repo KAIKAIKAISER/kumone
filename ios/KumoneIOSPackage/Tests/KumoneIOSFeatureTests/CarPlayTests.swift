@@ -2,174 +2,117 @@
 import Testing
 import CarPlay
 import UIKit
-@testable import KumoneIOSFeature
 @testable import KumoneCore
 
-@Suite("CarPlay Integration Tests")
-struct CarPlayTests {
+/// Covers the playback-queue template that backs CarPlay's Up Next button.
+///
+/// The rest of the CarPlay stack (CarPlayConnector) drives CPInterfaceController and
+/// CPNowPlayingTemplate.shared, neither of which can be instantiated outside a live CarPlay
+/// scene, so it is exercised on-device rather than here. `queueTemplate` is deliberately a
+/// pure function of player state so this part stays unit-testable.
+@Suite("CarPlay queue template")
+struct CarPlayQueueTemplateTests {
 
-    @Test("CarPlay image helper renders square artwork and circle avatars")
-    @MainActor
-    func testImageHelperRendering() {
-        let testImage = UIImage(systemName: "music.note") ?? UIImage()
-
-        let artwork = CarPlayImageHelper.formatArtwork(testImage, size: CGSize(width: 48, height: 48), cornerRadius: 8)
-        #expect(artwork.size.width == 48)
-        #expect(artwork.size.height == 48)
-
-        let avatar = CarPlayImageHelper.formatAvatar(testImage, diameter: 48)
-        #expect(avatar.size.width == 48)
-        #expect(avatar.size.height == 48)
-
-        let badge = CarPlayImageHelper.symbolBadge(systemName: "heart.fill", tint: .systemRed)
-        #expect(badge.size.width == 48)
-        #expect(badge.size.height == 48)
-
-        #expect(CarPlayImageHelper.trackPlaceholder.size.width == 48)
-        #expect(CarPlayImageHelper.playlistPlaceholder.size.width == 48)
-        #expect(CarPlayImageHelper.albumPlaceholder.size.width == 48)
-        #expect(CarPlayImageHelper.artistPlaceholder.size.width == 48)
-    }
-
-    @Test("CarPlayItemMapper maps Track to CPListItem accurately")
-    @MainActor
-    func testTrackMapping() {
+    private func makeTrack(id: Int, name: String, artist: String, album: String) throws -> Track {
         let json = """
         {
-            "id": 12345,
-            "name": "夜曲",
-            "artists": [{"id": 1, "name": "周杰伦"}],
-            "album": {"id": 10, "name": "十一月的萧邦", "picUrl": "https://example.com/pic.jpg"},
+            "id": \(id),
+            "name": "\(name)",
+            "artists": [{"id": 1, "name": "\(artist)"}],
+            "album": {"id": 10, "name": "\(album)", "picUrl": "https://example.com/pic.jpg"},
             "duration": 226000
         }
         """.data(using: .utf8)!
+        return try JSONDecoder().decode(Track.self, from: json)
+    }
 
-        let track = try! JSONDecoder().decode(Track.self, from: json)
-        var tapped = false
+    @Test("Pins the current track in its own section and lists what's next")
+    @MainActor
+    func buildsCurrentAndUpcomingSections() throws {
+        let current = try makeTrack(id: 1, name: "夜曲", artist: "周杰伦", album: "十一月的萧邦")
+        let next = try makeTrack(id: 2, name: "晴天", artist: "周杰伦", album: "叶惠美")
 
-        let item = CarPlayItemMapper.mapTrack(track, isPlaying: true) {
-            tapped = true
-        }
+        let template = CarPlayTemplateFactory.queueTemplate(
+            current: current,
+            upcoming: [next],
+            onCurrentTap: {},
+            onTrackTap: { _ in }
+        )
 
-        #expect(item.text == "夜曲")
-        #expect(item.detailText == "周杰伦 · 十一月的萧邦")
-        #expect(item.isPlaying == true)
-        #expect(item.playingIndicatorLocation == .leading)
+        #expect(template.sections.count == 2)
 
+        let currentSection = template.sections[0]
+        #expect(currentSection.header == "正在播放")
+        #expect(currentSection.items.count == 1)
+
+        let currentItem = try #require(currentSection.items.first as? CPListItem)
+        #expect(currentItem.text == "夜曲")
+        #expect(currentItem.detailText == "周杰伦")
+        // The pinned row is the only one flagged as playing, so the driver can tell at a
+        // glance which entry is live.
+        #expect(currentItem.isPlaying == true)
+
+        let upcomingSection = template.sections[1]
+        #expect(upcomingSection.header == "即将播放 · 1 首")
+        let nextItem = try #require(upcomingSection.items.first as? CPListItem)
+        #expect(nextItem.text == "晴天")
+        #expect(nextItem.isPlaying == false)
+    }
+
+    @Test("Tapping an upcoming row reports the track that was picked")
+    @MainActor
+    func upcomingRowForwardsItsTrack() throws {
+        let first = try makeTrack(id: 2, name: "晴天", artist: "周杰伦", album: "叶惠美")
+        let second = try makeTrack(id: 3, name: "稻香", artist: "周杰伦", album: "魔杰座")
+        var picked: Track?
+
+        let template = CarPlayTemplateFactory.queueTemplate(
+            current: nil,
+            upcoming: [first, second],
+            onCurrentTap: {},
+            onTrackTap: { picked = $0 }
+        )
+
+        // No current track → only the upcoming section is built.
+        #expect(template.sections.count == 1)
+
+        let item = try #require(template.sections[0].items[1] as? CPListItem)
         item.handler?(item, {})
-        #expect(tapped == true)
+        #expect(picked?.id == second.id)
     }
 
-    @Test("CarPlayItemMapper maps Playlist to CPListItem")
+    @Test("Caps very long queues at CarPlay's limit but still reports the true count")
     @MainActor
-    func testPlaylistMapping() {
-        var tapped = false
-        let item = CarPlayItemMapper.mapPlaylist(
-            id: 999,
-            title: "华语经典",
-            coverURL: "https://example.com/cover.jpg",
-            trackCount: 50,
-            creatorName: "云音乐官方"
-        ) {
-            tapped = true
-        }
+    func capsQueueLength() throws {
+        let total = CPListTemplate.maximumItemCount + 120
+        let tracks = try (0..<total).map { try makeTrack(id: $0, name: "曲目\($0)", artist: "歌手", album: "专辑") }
 
-        #expect(item.text == "华语经典")
-        #expect(item.detailText == "50 首 · 云音乐官方")
-        #expect(item.accessoryType == .disclosureIndicator)
+        let template = CarPlayTemplateFactory.queueTemplate(
+            current: nil,
+            upcoming: tracks,
+            onCurrentTap: {},
+            onTrackTap: { _ in }
+        )
 
-        item.handler?(item, {})
-        #expect(tapped == true)
+        // Anything past the framework limit is dropped by CarPlay itself, so the template must
+        // not rely on a hand-picked cap.
+        #expect(template.sections[0].items.count == CPListTemplate.maximumItemCount)
+        // ...but the header still tells the driver how long the queue really is.
+        #expect(template.sections[0].header == "即将播放 · \(total) 首")
     }
 
-    @Test("CarPlayItemMapper maps Album and Artist")
+    @Test("Shows an empty-state message when nothing is queued")
     @MainActor
-    func testAlbumAndArtistMapping() {
-        let albumItem = CarPlayItemMapper.mapAlbum(
-            id: 200,
-            title: "范特西",
-            artistName: "周杰伦",
-            coverURL: nil,
-            trackCount: 10
-        ) {}
+    func emptyQueue() {
+        let template = CarPlayTemplateFactory.queueTemplate(
+            current: nil,
+            upcoming: [],
+            onCurrentTap: {},
+            onTrackTap: { _ in }
+        )
 
-        #expect(albumItem.text == "范特西")
-        #expect(albumItem.detailText == "周杰伦 · 10 首")
-        #expect(albumItem.accessoryType == .disclosureIndicator)
-
-        let artistItem = CarPlayItemMapper.mapArtist(
-            id: 300,
-            title: "周杰伦",
-            avatarURL: nil,
-            musicCount: 300
-        ) {}
-
-        #expect(artistItem.text == "周杰伦")
-        #expect(artistItem.detailText == "300 首单曲")
-        #expect(artistItem.accessoryType == .disclosureIndicator)
-    }
-
-    @Test("CarPlayItemMapper maps Action item")
-    @MainActor
-    func testActionItemMapping() {
-        var tapped = false
-        let actionItem = CarPlayItemMapper.mapActionItem(
-            title: "每日推荐",
-            subtitle: "30 首单曲",
-            systemName: "calendar",
-            tint: .systemOrange,
-            showsDisclosure: true
-        ) {
-            tapped = true
-        }
-
-        #expect(actionItem.text == "每日推荐")
-        #expect(actionItem.detailText == "30 首单曲")
-        #expect(actionItem.accessoryType == .disclosureIndicator)
-
-        actionItem.handler?(actionItem, {})
-        #expect(tapped == true)
-    }
-
-    @Test("CarPlayNowPlayingController updates buttons correctly")
-    @MainActor
-    func testNowPlayingControllerButtons() {
-        let manager = CarPlayManager.shared
-        CarPlayNowPlayingController.shared.attach(manager: manager)
-        CarPlayNowPlayingController.shared.updateButtons()
-
-        let template = CPNowPlayingTemplate.shared
-        #expect(template.isUpNextButtonEnabled == true)
-        #expect(template.upNextTitle == "播放队列")
-    }
-
-    @Test("CarPlayTemplateBuilder constructs all main templates")
-    @MainActor
-    func testTemplateBuilder() {
-        let manager = CarPlayManager.shared
-        let builder = CarPlayTemplateBuilder(manager: manager)
-
-        let recommendTemplate = builder.makeRecommendTemplate()
-        #expect(recommendTemplate.title == "推荐")
-        #expect(recommendTemplate.trailingNavigationBarButtons.count >= 1)
-
-        let radioTemplate = builder.makeRadioTemplate()
-        #expect(radioTemplate.title == "漫游")
-
-        let libraryTemplate = builder.makeLibraryTemplate()
-        #expect(libraryTemplate.title == "我的")
-
-        let queueTemplate = builder.makeQueueTemplate()
-        #expect(queueTemplate.title == "播放队列")
-
-        let nowPlayingBarBtn = builder.makeNowPlayingBarButton()
-        #expect(nowPlayingBarBtn.image != nil)
-
-        let playAllBtn = builder.makePlayAllBarButton {}
-        #expect(playAllBtn.image != nil)
-
-        let shuffleBtn = builder.makeShuffleBarButton {}
-        #expect(shuffleBtn.image != nil)
+        #expect(template.sections.isEmpty)
+        #expect(template.emptyViewTitleVariants == ["当前没有播放队列"])
     }
 }
 #endif
