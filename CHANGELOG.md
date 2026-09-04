@@ -34,6 +34,8 @@ counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单
 
 - **iOS**: in the immersive now-playing page, tapping the small top-left cover while lyrics (or the queue) are shown collapses back to the full artwork — matching Apple Music. (#50)
 - **iOS**：沉浸播放页在显示歌词（或队列）时，点击左上角的小封面即可收起、回到大封面视图，与 Apple Music 一致。（#50）
+- **iOS**: detail-page loading skeletons unified, the FM (漫游) page scales responsively on small/landscape screens, immersive-lyrics scroll & scale are smoother, and floating player-bar / tab-bar clearance is computed more accurately. Thanks @fanyuexiang (#65).
+- **iOS**：详情页加载骨架统一、FM（漫游）页在小屏/横屏自适应缩放、沉浸歌词滚动与缩放更顺滑、底部播放条 / tab bar 留白计算更准确。感谢 @fanyuexiang（#65）。
 
 ## 0.3.14 - 2026-08-29
 
