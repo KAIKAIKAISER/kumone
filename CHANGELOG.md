@@ -20,6 +20,11 @@ counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单
 - **iOS**: CarPlay is now excluded from the default build entirely, not just left unsigned — `UISupportsCarPlay` and the `CPTemplateApplicationSceneSessionRoleApplication` scene declaration have moved out of `ios/Config/Info.plist` and are injected, together with the `com.apple.developer.carplay-audio` entitlement, only by `make configure-carplay`. The overlay is written to untracked files and never touches the Xcode project, so enabling CarPlay leaves the working tree clean. Replaces the previous "uncomment `KumoneIOS.entitlements.example` by hand" flow. (#54)
 - **iOS**：CarPlay 现在从默认构建中完全移除，而不只是不签名——`UISupportsCarPlay` 与 `CPTemplateApplicationSceneSessionRoleApplication` scene 声明已移出 `ios/Config/Info.plist`，与 `com.apple.developer.carplay-audio` entitlement 一起，仅由 `make configure-carplay` 注入。覆盖文件均不纳入 git 且完全不改动 Xcode 工程，开启 CarPlay 后工作区依然干净。取代原先手动取消注释 `KumoneIOS.entitlements.example` 的流程。（#54）
 
+### Fixed / 修复
+
+- **iOS**: the in-app updater now saves the downloaded IPA into the app's Documents folder — findable in the Files app under On My iPhone ▸ Kumone (the app now enables file sharing) — and opens a share sheet so it can be saved or handed straight to a signing tool (全能签 / ESign / AltStore …), instead of only offering an export dialog that left users unable to locate the file. (#73, #50)
+- **iOS**：应用内更新现在会把下载的 IPA 保存到 App 的 Documents 目录——可在「文件」App ▸ 我的 iPhone ▸ Kumone 里找到（已开启文件共享）——并弹出分享面板，可保存或直接导入签名工具（全能签 / ESign / AltStore 等），不再是之前那种让人找不到文件的导出弹窗。（#73，#50）
+
 ## 0.3.15 - 2026-09-03
 
 ### Added / 新增

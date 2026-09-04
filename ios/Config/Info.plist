@@ -18,6 +18,13 @@
     <array>
         <string>audio</string>
     </array>
+    <!-- Expose the app's Documents folder in the Files app (On My iPhone ▸
+         Kumone) so a downloaded update IPA is findable and can be imported into
+         a signing tool. (#73, #50) -->
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
