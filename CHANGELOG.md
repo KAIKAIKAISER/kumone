@@ -6,7 +6,7 @@
 section the English bullets come first, followed by their Simplified Chinese
 counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单行。
 
-## 0.3.15 - 2026-09-01
+## 0.3.15 - 2026-09-03
 
 ### Added / 新增
 
