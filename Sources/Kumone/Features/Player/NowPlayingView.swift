@@ -2480,7 +2480,7 @@ struct MiniLyricsView: View {
 
     @ViewBuilder
     private func line(_ line: LyricLine?, emphasized: Bool) -> some View {
-        VStack(spacing: emphasized ? 3 : 1)
+        VStack(spacing: emphasized ? 3 : 1) {
             Text(line?.text.isEmpty == false ? line!.text : " ")
                 .font(.system(size: emphasized ? 17 : 14, weight: emphasized ? .bold : .medium))
                 .foregroundStyle(.white.opacity(emphasized ? 1 : 0.45))
