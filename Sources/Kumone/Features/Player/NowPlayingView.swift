@@ -354,7 +354,7 @@ struct NowPlayingView: View {
                                 showLyricsOnMobile = true
                             }
                         })
-                        .frame(maxWidth: .infinity, maxHeight: 70)
+                        .frame(maxWidth: .infinity, minHeight: 70)
 
                         Spacer(minLength: 0)
                     }
@@ -540,7 +540,7 @@ struct NowPlayingView: View {
                     value: .bounds
                 ) { [.expanded: $0] }
             MiniLyricsView(onOpen: showImmersiveLyrics)
-                .frame(maxWidth: .infinity, maxHeight: 96)
+                .frame(maxWidth: .infinity, minHeight: 96)
             Spacer(minLength: 0)
         }
     }
@@ -2441,6 +2441,7 @@ struct NowPlayingScrubber: View {
 /// Tapping opens the full lyrics page.
 struct MiniLyricsView: View {
     let onOpen: () -> Void
+        @EnvironmentObject private var settings: SettingsManager
 
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
@@ -2479,13 +2480,26 @@ struct MiniLyricsView: View {
 
     @ViewBuilder
     private func line(_ line: LyricLine?, emphasized: Bool) -> some View {
-        Text(line?.text.isEmpty == false ? line!.text : " ")
-            .font(.system(size: emphasized ? 17 : 14, weight: emphasized ? .bold : .medium))
-            .foregroundStyle(.white.opacity(emphasized ? 1 : 0.45))
-            .lineLimit(1)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 28)
-            .id(line?.id)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        VStack(spacing: emphasized ? 3 : 1)
+            Text(line?.text.isEmpty == false ? line!.text : " ")
+                .font(.system(size: emphasized ? 17 : 14, weight: emphasized ? .bold : .medium))
+                .foregroundStyle(.white.opacity(emphasized ? 1 : 0.45))
+                .lineLimit(emphasized ? nil : 1)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if settings.showLyricsTranslation,
+               let translation = line?.translation?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !translation.isEmpty {
+                Text(translation)
+                    .font(.system(size: emphasized ? 13 : 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(emphasized ? 0.72 : 0.38))
+                    .lineLimit(emphasized ? nil : 1)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 28)
+        .id(line?.id)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 }
