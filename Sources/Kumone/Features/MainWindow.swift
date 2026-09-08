@@ -77,6 +77,9 @@ struct MainWindow: View {
             // last WindowGroup window, there is no view left to receive a
             // Dock reopen event directly.
             AppDelegate.shared?.openMainWindow = { openWindow(id: "main") }
+            artworkStore.setArtworkNeeded(
+                settings.showMainWindowAmbientBackground || player.showNowPlaying
+            )
 #endif
             DesktopLyricsController.shared.sync(with: settings.showDesktopLyrics)
             await account.bootstrap()
@@ -84,10 +87,22 @@ struct MainWindow: View {
         .onChange(of: settings.showDesktopLyrics) { _ in
             DesktopLyricsController.shared.sync(with: settings.showDesktopLyrics)
         }
+        #if os(macOS)
+        .onChange(of: settings.showMainWindowAmbientBackground) { _ in
+            artworkStore.setArtworkNeeded(
+                settings.showMainWindowAmbientBackground || player.showNowPlaying
+            )
+        }
+        #endif
         // Collapse the sidebar while the immersive page is open: the split
         // view's divider keeps its resize-cursor rect active even underneath
         // an overlay, leaking the drag cursor onto the now-playing page (#6).
         .onChange(of: player.showNowPlaying) { _ in
+            #if os(macOS)
+            artworkStore.setArtworkNeeded(
+                settings.showMainWindowAmbientBackground || player.showNowPlaying
+            )
+            #endif
             if player.showNowPlaying {
                 visibilityBeforeNowPlaying = columnVisibility
                 columnVisibility = .detailOnly
@@ -206,9 +221,9 @@ struct MainWindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
         DispatchQueue.main.async {
-            context.coordinator.attach(to: view.window)
-            context.coordinator.configureAmbientBackground(
-                showsAmbientBackground,
+            context.coordinator.requestAmbientBackgroundConfiguration(
+                from: view,
+                showsAmbientBackground: showsAmbientBackground,
                 showsTitlebarAmbientBackground: showsTitlebarAmbientBackground,
                 colors: colors,
                 mainColumnWidth: mainColumnWidth,
@@ -220,9 +235,9 @@ struct MainWindowConfigurator: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
-            context.coordinator.attach(to: nsView.window)
-            context.coordinator.configureAmbientBackground(
-                showsAmbientBackground,
+            context.coordinator.requestAmbientBackgroundConfiguration(
+                from: nsView,
+                showsAmbientBackground: showsAmbientBackground,
                 showsTitlebarAmbientBackground: showsTitlebarAmbientBackground,
                 colors: colors,
                 mainColumnWidth: mainColumnWidth,
@@ -243,6 +258,17 @@ struct MainWindowConfigurator: NSViewRepresentable {
         private var mainColumnWidth: CGFloat = 0
         private var intensity: Double = 1
         private var titlebarMask: TitlebarMaskView?
+        private weak var configurationHost: NSView?
+        private var pendingAmbientConfiguration: AmbientConfiguration?
+        private var hasScheduledAmbientConfiguration = false
+
+        private struct AmbientConfiguration {
+            let showsAmbientBackground: Bool
+            let showsTitlebarAmbientBackground: Bool
+            let colors: ArtworkColors
+            let mainColumnWidth: CGFloat
+            let intensity: Double
+        }
 
         func attach(to window: NSWindow?) {
             guard let window, self.window == nil else { return }
@@ -255,6 +281,41 @@ struct MainWindowConfigurator: NSViewRepresentable {
                 window.delegate = self
             }
             AppDelegate.shared?.mainWindow = window
+        }
+
+        func requestAmbientBackgroundConfiguration(
+            from host: NSView,
+            showsAmbientBackground: Bool,
+            showsTitlebarAmbientBackground: Bool,
+            colors: ArtworkColors,
+            mainColumnWidth: CGFloat,
+            intensity: Double
+        ) {
+            configurationHost = host
+            pendingAmbientConfiguration = AmbientConfiguration(
+                showsAmbientBackground: showsAmbientBackground,
+                showsTitlebarAmbientBackground: showsTitlebarAmbientBackground,
+                colors: colors,
+                mainColumnWidth: mainColumnWidth,
+                intensity: intensity
+            )
+            guard !hasScheduledAmbientConfiguration else { return }
+            hasScheduledAmbientConfiguration = true
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.hasScheduledAmbientConfiguration = false
+                guard let configuration = self.pendingAmbientConfiguration else { return }
+                self.pendingAmbientConfiguration = nil
+                self.attach(to: self.configurationHost?.window)
+                self.configureAmbientBackground(
+                    configuration.showsAmbientBackground,
+                    showsTitlebarAmbientBackground: configuration.showsTitlebarAmbientBackground,
+                    colors: configuration.colors,
+                    mainColumnWidth: configuration.mainColumnWidth,
+                    intensity: configuration.intensity
+                )
+            }
         }
 
         func configureAmbientBackground(
@@ -344,8 +405,12 @@ struct MainWindowConfigurator: NSViewRepresentable {
                 height: titlebarHeight
             )
 
-            mask.frame = frame
-            mask.isHidden = false
+            if mask.frame != frame {
+                mask.frame = frame
+            }
+            if mask.isHidden {
+                mask.isHidden = false
+            }
             mask.update(
                 colors: colors,
                 appearance: window.effectiveAppearance,
@@ -378,6 +443,9 @@ struct MainWindowConfigurator: NSViewRepresentable {
 
 private final class TitlebarMaskView: NSView {
     private let gradientLayer = CAGradientLayer()
+    private var appliedColors: ArtworkColors?
+    private var appliedAppearanceName: NSAppearance.Name?
+    private var appliedIntensity: Double?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -396,6 +464,15 @@ private final class TitlebarMaskView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     func update(colors: ArtworkColors, appearance: NSAppearance, intensity: Double) {
+        guard appliedColors != colors
+                || appliedAppearanceName != appearance.name
+                || appliedIntensity != intensity else {
+            return
+        }
+        appliedColors = colors
+        appliedAppearanceName = appearance.name
+        appliedIntensity = intensity
+
         let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         let opacity = CGFloat(
             MainWindowAmbientOpacity.gradient(isDark: isDark, intensity: intensity)

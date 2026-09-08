@@ -21,6 +21,7 @@ final class NowPlayingArtworkStore: ObservableObject {
     private var loadTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     private var artworkURL: String?
+    private var artworkIsNeeded = false
 
     init(
         player: PlayerService?,
@@ -45,13 +46,30 @@ final class NowPlayingArtworkStore: ObservableObject {
     func update(trackID: Int?, artworkURL: String?) {
         guard self.trackID != trackID || self.artworkURL != artworkURL else { return }
 
-        loadTask?.cancel()
-        loadTask = nil
-        request = nil
+        cancelArtworkLoad()
         self.trackID = trackID
         self.artworkURL = artworkURL
         artwork = nil
         colors = .fallback
+
+        loadArtworkForCurrentTrack()
+    }
+
+    func setArtworkNeeded(_ artworkIsNeeded: Bool) {
+        guard self.artworkIsNeeded != artworkIsNeeded else { return }
+        self.artworkIsNeeded = artworkIsNeeded
+
+        if artworkIsNeeded {
+            loadArtworkForCurrentTrack()
+        } else {
+            cancelArtworkLoad()
+            artwork = nil
+            colors = .fallback
+        }
+    }
+
+    private func loadArtworkForCurrentTrack() {
+        guard artworkIsNeeded else { return }
 
         guard let trackID,
               let artworkURL,
@@ -79,5 +97,11 @@ final class NowPlayingArtworkStore: ObservableObject {
             self.artwork = image
             self.colors = ArtworkPalette.extract(from: image, cacheKey: request.artworkURL)
         }
+    }
+
+    private func cancelArtworkLoad() {
+        loadTask?.cancel()
+        loadTask = nil
+        request = nil
     }
 }

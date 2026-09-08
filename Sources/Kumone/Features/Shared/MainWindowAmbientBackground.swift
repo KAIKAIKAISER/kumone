@@ -45,6 +45,10 @@ struct MainWindowAmbientBackground: View {
             Platform.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.6),
             value: colors
         )
+        .animation(
+            Platform.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.6),
+            value: intensity
+        )
     }
 }
 

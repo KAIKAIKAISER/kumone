@@ -15,6 +15,7 @@ struct NowPlayingArtworkStoreTests {
             }
             return secondArtwork
         }
+        store.setArtworkNeeded(true)
 
         store.update(
             trackID: 1,
@@ -41,18 +42,42 @@ struct NowPlayingArtworkStoreTests {
     }
 
     @Test func failedArtworkLoadUsesFallback() async {
-        let store = NowPlayingArtworkStore(player: nil) { _ in nil }
+        let loaderCalls = ImageLoaderCallSignal()
+        let store = NowPlayingArtworkStore(player: nil) { _ in
+            await loaderCalls.record()
+            return nil
+        }
+        store.setArtworkNeeded(true)
 
         store.update(
             trackID: 1,
             artworkURL: "https://example.com/missing-artwork.jpg"
         )
-        await Task.yield()
-        await Task.yield()
+        await loaderCalls.waitForCall()
 
         #expect(store.trackID == 1)
         #expect(store.artwork == nil)
         #expect(store.colors == .fallback)
+    }
+
+    @Test func waitsForAConsumerBeforeLoadingArtwork() async {
+        let loaderCalls = ImageLoaderCallSignal()
+        let store = NowPlayingArtworkStore(player: nil) { _ in
+            await loaderCalls.record()
+            return nil
+        }
+
+        store.update(
+            trackID: 1,
+            artworkURL: "https://example.com/artwork.jpg"
+        )
+
+        #expect(await loaderCalls.callCount() == 0)
+
+        store.setArtworkNeeded(true)
+        await loaderCalls.waitForCall()
+
+        #expect(await loaderCalls.callCount() == 1)
     }
 
     private func artwork(color: NSColor) -> PlatformImage {
@@ -63,4 +88,23 @@ struct NowPlayingArtworkStoreTests {
         image.unlockFocus()
         return image
     }
+}
+
+private actor ImageLoaderCallSignal {
+    private var count = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func record() {
+        count += 1
+        let waiters = waiters
+        self.waiters = []
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitForCall() async {
+        guard count == 0 else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func callCount() -> Int { count }
 }
