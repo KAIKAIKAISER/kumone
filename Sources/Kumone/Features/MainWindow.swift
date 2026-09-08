@@ -58,11 +58,13 @@ struct MainWindow: View {
         // icon can always bring it back (#60/#63/#66/#70).
         .background(
             MainWindowConfigurator(
-                showsAmbientBackground: settings.showMainWindowAmbientBackground,
-                showsTitlebarAmbientBackground: !player.showNowPlaying,
-                colors: artworkStore.colors,
-                mainColumnWidth: detailWidth,
-                intensity: settings.mainWindowAmbientBackgroundIntensity
+                ambientConfiguration: MainWindowAmbientConfiguration(
+                    showsAmbientBackground: settings.showMainWindowAmbientBackground,
+                    showsTitlebarAmbientBackground: !player.showNowPlaying,
+                    colors: artworkStore.colors,
+                    mainColumnWidth: detailWidth,
+                    intensity: settings.mainWindowAmbientBackgroundIntensity
+                )
             )
         )
         #endif
@@ -77,9 +79,7 @@ struct MainWindow: View {
             // last WindowGroup window, there is no view left to receive a
             // Dock reopen event directly.
             AppDelegate.shared?.openMainWindow = { openWindow(id: "main") }
-            artworkStore.setArtworkNeeded(
-                settings.showMainWindowAmbientBackground || player.showNowPlaying
-            )
+            artworkStore.setArtworkNeeded(needsCurrentArtwork)
 #endif
             DesktopLyricsController.shared.sync(with: settings.showDesktopLyrics)
             await account.bootstrap()
@@ -89,9 +89,7 @@ struct MainWindow: View {
         }
         #if os(macOS)
         .onChange(of: settings.showMainWindowAmbientBackground) { _ in
-            artworkStore.setArtworkNeeded(
-                settings.showMainWindowAmbientBackground || player.showNowPlaying
-            )
+            artworkStore.setArtworkNeeded(needsCurrentArtwork)
         }
         #endif
         // Collapse the sidebar while the immersive page is open: the split
@@ -99,9 +97,7 @@ struct MainWindow: View {
         // an overlay, leaking the drag cursor onto the now-playing page (#6).
         .onChange(of: player.showNowPlaying) { _ in
             #if os(macOS)
-            artworkStore.setArtworkNeeded(
-                settings.showMainWindowAmbientBackground || player.showNowPlaying
-            )
+            artworkStore.setArtworkNeeded(needsCurrentArtwork)
             #endif
             if player.showNowPlaying {
                 visibilityBeforeNowPlaying = columnVisibility
@@ -197,6 +193,11 @@ struct MainWindow: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    #if os(macOS)
+    private var needsCurrentArtwork: Bool {
+        settings.showMainWindowAmbientBackground || player.showNowPlaying
+    }
+    #endif
 }
 
 #if os(macOS)
@@ -210,11 +211,7 @@ struct MainWindow: View {
 /// can front it again on a Dock click. Every other window-delegate callback is
 /// forwarded untouched to SwiftUI's own delegate.
 struct MainWindowConfigurator: NSViewRepresentable {
-    let showsAmbientBackground: Bool
-    let showsTitlebarAmbientBackground: Bool
-    let colors: ArtworkColors
-    let mainColumnWidth: CGFloat
-    let intensity: Double
+    let ambientConfiguration: MainWindowAmbientConfiguration
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -223,11 +220,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
         DispatchQueue.main.async {
             context.coordinator.requestAmbientBackgroundConfiguration(
                 from: view,
-                showsAmbientBackground: showsAmbientBackground,
-                showsTitlebarAmbientBackground: showsTitlebarAmbientBackground,
-                colors: colors,
-                mainColumnWidth: mainColumnWidth,
-                intensity: intensity
+                ambientConfiguration: ambientConfiguration
             )
         }
         return view
@@ -237,11 +230,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
         DispatchQueue.main.async {
             context.coordinator.requestAmbientBackgroundConfiguration(
                 from: nsView,
-                showsAmbientBackground: showsAmbientBackground,
-                showsTitlebarAmbientBackground: showsTitlebarAmbientBackground,
-                colors: colors,
-                mainColumnWidth: mainColumnWidth,
-                intensity: intensity
+                ambientConfiguration: ambientConfiguration
             )
         }
     }
@@ -250,25 +239,10 @@ struct MainWindowConfigurator: NSViewRepresentable {
     final class Coordinator: NSObject, NSWindowDelegate {
         private(set) weak var window: NSWindow?
         private weak var forwardee: NSWindowDelegate?
-        private var showsAmbientBackground = false
-        private var showsTitlebarAmbientBackground = false
-        private var titlebarWasTransparent: Bool?
-        private var hadFullSizeContentView = false
-        private var colors: ArtworkColors = .fallback
-        private var mainColumnWidth: CGFloat = 0
-        private var intensity: Double = 1
-        private var titlebarMask: TitlebarMaskView?
+        private let ambientAppearance = MainWindowAmbientAppearanceController()
         private weak var configurationHost: NSView?
-        private var pendingAmbientConfiguration: AmbientConfiguration?
+        private var pendingAmbientConfiguration: MainWindowAmbientConfiguration?
         private var hasScheduledAmbientConfiguration = false
-
-        private struct AmbientConfiguration {
-            let showsAmbientBackground: Bool
-            let showsTitlebarAmbientBackground: Bool
-            let colors: ArtworkColors
-            let mainColumnWidth: CGFloat
-            let intensity: Double
-        }
 
         func attach(to window: NSWindow?) {
             guard let window, self.window == nil else { return }
@@ -285,20 +259,10 @@ struct MainWindowConfigurator: NSViewRepresentable {
 
         func requestAmbientBackgroundConfiguration(
             from host: NSView,
-            showsAmbientBackground: Bool,
-            showsTitlebarAmbientBackground: Bool,
-            colors: ArtworkColors,
-            mainColumnWidth: CGFloat,
-            intensity: Double
+            ambientConfiguration: MainWindowAmbientConfiguration
         ) {
             configurationHost = host
-            pendingAmbientConfiguration = AmbientConfiguration(
-                showsAmbientBackground: showsAmbientBackground,
-                showsTitlebarAmbientBackground: showsTitlebarAmbientBackground,
-                colors: colors,
-                mainColumnWidth: mainColumnWidth,
-                intensity: intensity
-            )
+            pendingAmbientConfiguration = ambientConfiguration
             guard !hasScheduledAmbientConfiguration else { return }
             hasScheduledAmbientConfiguration = true
 
@@ -308,119 +272,16 @@ struct MainWindowConfigurator: NSViewRepresentable {
                 guard let configuration = self.pendingAmbientConfiguration else { return }
                 self.pendingAmbientConfiguration = nil
                 self.attach(to: self.configurationHost?.window)
-                self.configureAmbientBackground(
-                    configuration.showsAmbientBackground,
-                    showsTitlebarAmbientBackground: configuration.showsTitlebarAmbientBackground,
-                    colors: configuration.colors,
-                    mainColumnWidth: configuration.mainColumnWidth,
-                    intensity: configuration.intensity
-                )
-            }
-        }
-
-        func configureAmbientBackground(
-            _ showsAmbientBackground: Bool,
-            showsTitlebarAmbientBackground: Bool,
-            colors: ArtworkColors,
-            mainColumnWidth: CGFloat,
-            intensity: Double
-        ) {
-            self.showsTitlebarAmbientBackground = showsTitlebarAmbientBackground
-            self.colors = colors
-            self.mainColumnWidth = mainColumnWidth
-            self.intensity = intensity
-            guard let window else { return }
-
-            guard self.showsAmbientBackground != showsAmbientBackground else {
-                applyAmbientWindowAppearance()
-                return
-            }
-            self.showsAmbientBackground = showsAmbientBackground
-
-            if showsAmbientBackground {
-                titlebarWasTransparent = window.titlebarAppearsTransparent
-                hadFullSizeContentView = window.styleMask.contains(.fullSizeContentView)
-                applyAmbientWindowAppearance()
-            } else {
-                window.titlebarAppearsTransparent = titlebarWasTransparent ?? false
-                if hadFullSizeContentView {
-                    window.styleMask.insert(.fullSizeContentView)
-                } else {
-                    window.styleMask.remove(.fullSizeContentView)
-                }
-                titlebarWasTransparent = nil
-                removeTitlebarMask()
+                guard let window = self.window else { return }
+                self.ambientAppearance.configure(configuration, in: window)
             }
         }
 
         func windowDidUpdate(_ notification: Notification) {
-            applyAmbientWindowAppearance()
+            if let window {
+                ambientAppearance.updateLayout(in: window)
+            }
             forwardee?.windowDidUpdate?(notification)
-        }
-
-        private func applyAmbientWindowAppearance() {
-            guard showsAmbientBackground, let window else { return }
-            if !window.titlebarAppearsTransparent {
-                window.titlebarAppearsTransparent = true
-            }
-            if !window.styleMask.contains(.fullSizeContentView) {
-                window.styleMask.insert(.fullSizeContentView)
-            }
-            guard showsTitlebarAmbientBackground else {
-                removeTitlebarMask()
-                return
-            }
-            installTitlebarMask(in: window)
-            layoutTitlebarMask(in: window)
-        }
-
-        private func installTitlebarMask(in window: NSWindow) {
-            guard titlebarMask == nil, let contentView = window.contentView else { return }
-            let mask = TitlebarMaskView()
-            contentView.addSubview(mask, positioned: .above, relativeTo: nil)
-            titlebarMask = mask
-        }
-
-        private func layoutTitlebarMask(in window: NSWindow) {
-            guard let mask = titlebarMask, let contentView = window.contentView else { return }
-            let width = min(max(mainColumnWidth, 0), contentView.bounds.width)
-            guard width > 0 else {
-                mask.isHidden = true
-                return
-            }
-
-            let layoutRect = window.contentLayoutRect
-            let titlebarHeight = contentView.bounds.height - layoutRect.height
-            guard titlebarHeight > 0 else {
-                mask.isHidden = true
-                return
-            }
-            let y = contentView.isFlipped
-                ? contentView.bounds.minY
-                : contentView.bounds.maxY - titlebarHeight
-            let frame = CGRect(
-                x: contentView.bounds.maxX - width,
-                y: y,
-                width: width,
-                height: titlebarHeight
-            )
-
-            if mask.frame != frame {
-                mask.frame = frame
-            }
-            if mask.isHidden {
-                mask.isHidden = false
-            }
-            mask.update(
-                colors: colors,
-                appearance: window.effectiveAppearance,
-                intensity: intensity
-            )
-        }
-
-        private func removeTitlebarMask() {
-            titlebarMask?.removeFromSuperview()
-            titlebarMask = nil
         }
 
         // Hide instead of close; keep the scene alive.
@@ -438,68 +299,6 @@ struct MainWindowConfigurator: NSViewRepresentable {
             if forwardee?.responds(to: aSelector) == true { return forwardee }
             return super.forwardingTarget(for: aSelector)
         }
-    }
-}
-
-private final class TitlebarMaskView: NSView {
-    private let gradientLayer = CAGradientLayer()
-    private var appliedColors: ArtworkColors?
-    private var appliedAppearanceName: NSAppearance.Name?
-    private var appliedIntensity: Double?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.addSublayer(gradientLayer)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    override func layout() {
-        super.layout()
-        gradientLayer.frame = bounds
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    func update(colors: ArtworkColors, appearance: NSAppearance, intensity: Double) {
-        guard appliedColors != colors
-                || appliedAppearanceName != appearance.name
-                || appliedIntensity != intensity else {
-            return
-        }
-        appliedColors = colors
-        appliedAppearanceName = appearance.name
-        appliedIntensity = intensity
-
-        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let opacity = CGFloat(
-            MainWindowAmbientOpacity.gradient(isDark: isDark, intensity: intensity)
-        )
-        let base = NSColor.windowBackgroundColor
-        let primary = blended(NSColor(colors.primary), over: base, opacity: opacity)
-        let secondary = blended(NSColor(colors.secondary), over: base, opacity: opacity)
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(Platform.isReduceMotionEnabled)
-        CATransaction.setAnimationDuration(0.6)
-        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
-        gradientLayer.colors = [primary.cgColor, secondary.cgColor]
-        gradientLayer.startPoint = CGPoint(x: 0, y: 1)
-        gradientLayer.endPoint = CGPoint(x: 1, y: 0)
-        CATransaction.commit()
-    }
-
-    private func blended(_ color: NSColor, over base: NSColor, opacity: CGFloat) -> NSColor {
-        let foreground = color.usingColorSpace(.extendedSRGB) ?? color
-        let background = base.usingColorSpace(.extendedSRGB) ?? base
-        return NSColor(
-            red: background.redComponent + (foreground.redComponent - background.redComponent) * opacity,
-            green: background.greenComponent + (foreground.greenComponent - background.greenComponent) * opacity,
-            blue: background.blueComponent + (foreground.blueComponent - background.blueComponent) * opacity,
-            alpha: 1
-        )
     }
 }
 #endif
