@@ -8,10 +8,17 @@ counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单
 
 ## 0.3.17 - 2026-09-10
 
+### Added / 新增
+
+- **macOS**: a 「减少推荐」 (reduce recommendation) right-click action on un-liked songs in 每日推荐 and 私人雷达 lists — it asks NetEase to swap the song out and replaces it in place. Thanks @yamakze (#84, closes #74).
+- **macOS**：每日推荐 / 私人雷达 列表里,未收藏歌曲的右键菜单新增「减少推荐」——会请求网易云替换该歌曲并就地替换。感谢 @yamakze（#84，关闭 #74）。
+
 ### Fixed / 修复
 
 - **iOS**: the lock screen and Dynamic Island Now Playing controls show previous/next track again instead of back-15s/forward-15s. Registering the ±15s skip commands (added for CarPlay in 0.3.15) made iOS pick the podcast-style skip layout system-wide and hid the track buttons; those commands are removed, so previous/next are the media buttons everywhere (CarPlay included). (#83, #87)
 - **iOS**：锁屏与灵动岛的「正在播放」控制重新显示上一首 / 下一首，而不是后退 15 秒 / 前进 15 秒。此前为 CarPlay 注册的 ±15 秒快进快退命令（0.3.15 引入）让 iOS 在全局采用了播客式布局、把切歌按钮挤掉了；现已移除这两个命令，上一首 / 下一首恢复为各处（含 CarPlay）的系统媒体按钮。（#83、#87）
+- **macOS**: the search results page no longer shows a second, empty system search box on top of the toolbar search field — the page's `.searchable` bar is now iOS-only. Thanks @yamakze (#90, closes #89).
+- **macOS**：搜索结果页不再在工具栏搜索框之外多出一个空的系统搜索框——结果页的 `.searchable` 搜索栏改为仅 iOS 使用。感谢 @yamakze（#90，关闭 #89）。
 
 ## 0.3.16 - 2026-09-03
 
