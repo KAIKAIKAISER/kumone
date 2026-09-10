@@ -44,9 +44,21 @@ struct MainWindow: View {
         }
         #endif
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                SearchFieldView { query in
-                    path.append(Destination.search(query))
+            if #available(macOS 26.0, iOS 26.0, *) {
+                ToolbarItem(placement: .primaryAction) {
+                    SearchFieldView { query in
+                        path.append(Destination.search(query))
+                    }
+                }
+                // Hide the Liquid Glass shared toolbar background behind the
+                // custom capsule search field, else it double-backgrounds on
+                // macOS 26 (dropped by #86's toolbar rewrite, restored here).
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    SearchFieldView { query in
+                        path.append(Destination.search(query))
+                    }
                 }
             }
         }
