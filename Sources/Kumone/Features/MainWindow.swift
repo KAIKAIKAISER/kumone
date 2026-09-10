@@ -346,6 +346,10 @@ struct SearchFieldView: View {
         .padding(.vertical, 5)
         .background(.primary.opacity(0.05), in: Capsule())
         .overlay(Capsule().strokeBorder(.primary.opacity(focused ? 0.18 : 0.08), lineWidth: 1))
+        #if os(macOS)
+        // Keep the capsule off the window's rounded top-right corner (#88).
+        .padding(.trailing, 8)
+        #endif
         .animation(AppAnimation.quick, value: focused)
         .task {
             if let keyword = try? await NeteaseAPI.searchDefaultKeyword(), !keyword.isEmpty {
