@@ -18,6 +18,11 @@ enum TrackDownloadAction: Equatable {
     case hidden
 }
 
+enum RecommendationContext {
+    case daily
+    case radar
+}
+
 // MARK: - Row
 
 struct TrackRow: View {
@@ -31,6 +36,7 @@ struct TrackRow: View {
     /// Set when the row lives inside a user's own playlist (enables 删除).
     var removableFromPlaylistID: Int?
     var onRemoved: (() -> Void)?
+    var onRecommendationReduced: ((Track) -> Void)?
     let onPlay: () -> Void
 
     @EnvironmentObject private var player: PlayerService
@@ -42,6 +48,7 @@ struct TrackRow: View {
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
     @State private var isHovering = false
     @State private var showAddToPlaylist = false
+    @State private var isReducingRecommendation = false
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
     private var isPlayable: Bool { playability == .playable }
@@ -302,6 +309,25 @@ struct TrackRow: View {
                 }
             }
         }
+        #if os(macOS)
+        if !account.isLiked(track.id), let onRecommendationReduced {
+            Button(String(localized: "减少推荐"), role: .destructive) {
+                guard !isReducingRecommendation else { return }
+                isReducingRecommendation = true
+                Task {
+                    defer { isReducingRecommendation = false }
+                    do {
+                        let replacement = try await NeteaseAPI.dislikeRecommendedSong(id: track.id)
+                        onRecommendationReduced(replacement)
+                        ToastCenter.shared.show(String(localized: "已减少推荐"))
+                    } catch {
+                        ToastCenter.shared.show(error.localizedDescription)
+                    }
+                }
+            }
+            .disabled(isReducingRecommendation)
+        }
+        #endif
         Divider()
         if track.album.id > 0 {
             NavigationLink(value: Destination.album(track.album.id)) {
@@ -552,6 +578,8 @@ struct TrackListView: View {
     var context: PlayContext?
     var removableFromPlaylistID: Int?
     var onRemoved: ((Track) -> Void)?
+    var recommendationContext: RecommendationContext?
+    var onRecommendationReduced: ((Track, Track) -> Void)?
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -559,6 +587,7 @@ struct TrackListView: View {
     var body: some View {
         LazyVStack(spacing: 1) {
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                let recommendationHandler = onRecommendationReduced
                 TrackRow(
                     track: track,
                     index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
@@ -566,7 +595,10 @@ struct TrackListView: View {
                     downloadAction: downloadAction,
                     playability: playability(of: track),
                     removableFromPlaylistID: removableFromPlaylistID,
-                    onRemoved: { onRemoved?(track) }
+                    onRemoved: { onRemoved?(track) },
+                    onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
+                        ? nil
+                        : { replacement in recommendationHandler?(track, replacement) }
                 ) {
                     player.play(tracks: playableTracks, source: source, startAt: track,
                                 context: context)

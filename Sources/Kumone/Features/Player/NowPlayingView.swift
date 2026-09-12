@@ -25,13 +25,18 @@ struct NowPlayingView: View {
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var settings: SettingsManager
+    #if os(macOS)
+    @EnvironmentObject private var artworkStore: NowPlayingArtworkStore
+    #endif
     #if os(iOS)
     @Environment(\.dismissNowPlayingAction) private var dismissNowPlayingAction
     @Environment(\.dismissNowPlayingDragAction) private var dismissNowPlayingDragAction
     #endif
 
-    @State private var artworkImage: PlatformImage?
-    @State private var colors: ArtworkColors = .fallback
+    #if os(iOS)
+    @State private var loadedArtworkImage: PlatformImage?
+    @State private var loadedArtworkColors: ArtworkColors = .fallback
+    #endif
     @State private var activeIndex: Int?
     @State private var isUserScrolling = false
     @State private var resumeTask: Task<Void, Never>?
@@ -113,16 +118,16 @@ struct NowPlayingView: View {
         .ignoresSafeArea()
         #endif
         .preferredColorScheme(.dark)
-        .onAppear {
-            #if os(iOS)
-            showLyricsOnMobile = player.mobileNowPlayingShowsLyrics
-                || settings.nowPlayingMode == .immersive
-            showQueueOnMobile = false
-            #endif
-        }
+        #if os(iOS)
         .task(id: player.currentTrack?.id) {
             await loadArtwork()
         }
+        .onAppear {
+            showLyricsOnMobile = player.mobileNowPlayingShowsLyrics
+                || settings.nowPlayingMode == .immersive
+            showQueueOnMobile = false
+        }
+        #endif
         .sheet(item: $selectedArtist) { artist in
             NavigationStack {
                 ArtistDetailView(artistID: artist.id)
@@ -227,6 +232,22 @@ struct NowPlayingView: View {
 
     // MARK: - Backdrop
 
+    private var artworkImage: PlatformImage? {
+        #if os(macOS)
+        artworkStore.artwork
+        #else
+        loadedArtworkImage
+        #endif
+    }
+
+    private var colors: ArtworkColors {
+        #if os(macOS)
+        artworkStore.colors
+        #else
+        loadedArtworkColors
+        #endif
+    }
+
     private var backdrop: some View {
         ZStack {
             LinearGradient(
@@ -246,18 +267,20 @@ struct NowPlayingView: View {
         .animation(.easeInOut(duration: 0.8), value: colors)
     }
 
+    #if os(iOS)
     private func loadArtwork() async {
         guard let urlString = player.currentTrack?.album.picUrl,
               let url = urlString.resizedImageURL(768) else {
-            artworkImage = nil
-            colors = .fallback
+            loadedArtworkImage = nil
+            loadedArtworkColors = .fallback
             return
         }
         if let image = await ImageCache.shared.image(for: url) {
-            artworkImage = image
-            colors = ArtworkPalette.extract(from: image, cacheKey: urlString)
+            loadedArtworkImage = image
+            loadedArtworkColors = ArtworkPalette.extract(from: image, cacheKey: urlString)
         }
     }
+    #endif
 
     // MARK: - Layouts
 
@@ -2441,9 +2464,9 @@ struct NowPlayingScrubber: View {
 /// Tapping opens the full lyrics page.
 struct MiniLyricsView: View {
     let onOpen: () -> Void
-        @EnvironmentObject private var settings: SettingsManager
 
     @EnvironmentObject private var player: PlayerService
+    @EnvironmentObject private var settings: SettingsManager
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
 
     private var lines: (previous: LyricLine?, current: LyricLine?, next: LyricLine?) {
@@ -2481,25 +2504,42 @@ struct MiniLyricsView: View {
     @ViewBuilder
     private func line(_ line: LyricLine?, emphasized: Bool) -> some View {
         VStack(spacing: emphasized ? 3 : 1) {
-            Text(line?.text.isEmpty == false ? line!.text : " ")
-                .font(.system(size: emphasized ? 17 : 14, weight: emphasized ? .bold : .medium))
-                .foregroundStyle(.white.opacity(emphasized ? 1 : 0.45))
-                .lineLimit(emphasized ? nil : 1)
-                .fixedSize(horizontal: false, vertical: true)
+            lyricText(
+                line?.text.isEmpty == false ? line!.text : " ",
+                emphasized: emphasized,
+                translation: false
+            )
 
             if settings.showLyricsTranslation,
                let translation = line?.translation?.trimmingCharacters(in: .whitespacesAndNewlines),
                !translation.isEmpty {
-                Text(translation)
-                    .font(.system(size: emphasized ? 13 : 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(emphasized ? 0.72 : 0.38))
-                    .lineLimit(emphasized ? nil : 1)
-                    .fixedSize(horizontal: false, vertical: true)
+                lyricText(translation, emphasized: emphasized, translation: true)
             }
         }
-        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 28)
         .id(line?.id)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    @ViewBuilder
+    private func lyricText(_ text: String, emphasized: Bool, translation: Bool) -> some View {
+        let fontSize: CGFloat = translation
+            ? (emphasized ? 13 : 11)
+            : (emphasized ? 17 : 14)
+
+        Text(text)
+            .font(.system(size: fontSize, weight: emphasized ? .bold : .medium))
+            .foregroundStyle(.white.opacity(
+                translation
+                    ? (emphasized ? 0.72 : 0.38)
+                    : (emphasized ? 1 : 0.45)
+            ))
+            // The active line is allowed to wrap instead of being silently
+            // truncated. Inactive rows stay single-line so the three-line
+            // preview remains compact.
+            .lineLimit(emphasized ? nil : 1)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.center)
     }
 }
