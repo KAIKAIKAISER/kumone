@@ -1,8 +1,8 @@
 name: Sync upstream
 
 on:
-  schedule:
-    - cron: "23 3 * * *"
+  # Upstream synchronization is manual only. Run this workflow from Actions
+  # when an upstream update has been reviewed and should be proposed.
   workflow_dispatch:
 
 permissions:
