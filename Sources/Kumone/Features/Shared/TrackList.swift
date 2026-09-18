@@ -82,21 +82,27 @@ struct TrackRow: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(track.name)
-                        .font(isCompact ? .callout.weight(.medium) : .system(size: 13, weight: .medium))
-                        .foregroundStyle(isCurrent ? Theme.accent : .primary)
-                        .lineLimit(1)
-                    if let subtitle = track.subtitle, !isCompact {
-                        Text("(\(subtitle))")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
+                Button {
+                    if isPlayable { onPlay() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(track.name)
+                            .font(isCompact ? .callout.weight(.medium) : .system(size: 13, weight: .medium))
+                            .foregroundStyle(isCurrent ? Theme.accent : .primary)
                             .lineLimit(1)
-                    }
-                    if track.fee == 1 {
-                        VIPBadge()
+                        if let subtitle = track.subtitle, !isCompact {
+                            Text("(\(subtitle))")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        if track.fee == 1 {
+                            VIPBadge()
+                        }
                     }
                 }
+                .buttonStyle(.plain)
+                .disabled(!isPlayable)
                 artistLinks
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -171,10 +177,17 @@ struct TrackRow: View {
 
     @ViewBuilder
     private var artwork: some View {
-        // The row itself is the play target. Album navigation remains
-        // available from the explicit album title on desktop and the context
-        // menu, while the artwork must not steal the tap on compact playlists.
-        artworkImage
+        if track.album.id > 0, !track.album.name.isEmpty {
+            Button {
+                openDestination(.album(track.album.id))
+            } label: {
+                artworkImage
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("打开专辑：\(track.album.name)")
+        } else {
+            artworkImage
+        }
     }
 
     @ViewBuilder
