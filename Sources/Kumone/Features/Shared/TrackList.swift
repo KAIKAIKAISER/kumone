@@ -85,26 +85,33 @@ struct TrackRow: View {
                 Button {
                     if isPlayable { onPlay() }
                 } label: {
-                    HStack(spacing: 6) {
-                        Text(track.name)
-                            .font(isCompact ? .callout.weight(.medium) : .system(size: 13, weight: .medium))
-                            .foregroundStyle(isCurrent ? Theme.accent : .primary)
-                            .lineLimit(1)
-                        if let subtitle = track.subtitle, !isCompact {
-                            Text("(\(subtitle))")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.tertiary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(track.name)
+                                .font(isCompact ? .callout.weight(.medium) : .system(size: 13, weight: .medium))
+                                .foregroundStyle(isCurrent ? Theme.accent : .primary)
                                 .lineLimit(1)
+                            if let subtitle = track.subtitle, !isCompact {
+                                Text("(\(subtitle))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            if track.fee == 1 {
+                                VIPBadge()
+                            }
                         }
-                        if track.fee == 1 {
-                            VIPBadge()
-                        }
+                        Text(track.artistNames)
+                            .font(isCompact ? .footnote : .system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!isPlayable)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                artistLinks
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -194,35 +201,6 @@ struct TrackRow: View {
             CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
                 .frame(width: 42, height: 42)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
-        }
-    }
-
-    @ViewBuilder
-    private var artistLinks: some View {
-        let artists = track.artists.filter { $0.id > 0 && !$0.name.isEmpty }
-        if artists.isEmpty {
-            Text(track.artistNames)
-                .font(isCompact ? .footnote : .system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        } else {
-            HStack(spacing: 0) {
-                ForEach(Array(artists.enumerated()), id: \.offset) { index, artist in
-                    if index > 0 {
-                        Text(" / ")
-                    }
-                    Button {
-                        openDestination(.artist(artist.id))
-                    } label: {
-                        Text(artist.name)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("打开歌手：\(artist.name)")
-                }
-            }
-            .font(isCompact ? .footnote : .system(size: 11.5))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
         }
     }
 
