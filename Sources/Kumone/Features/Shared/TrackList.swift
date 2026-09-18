@@ -29,6 +29,7 @@ struct TrackRow: View {
     let track: Track
     let index: Int
     var style: TrackRowStyle = .full
+    var allowsArtistNavigation: Bool = true
     var downloadAction: TrackDownloadAction = .automatic
     var playability: TrackPlayability = .playable
     /// Extra trailing text (e.g. play count for recents).
@@ -101,10 +102,12 @@ struct TrackRow: View {
                                 VIPBadge()
                             }
                         }
-                        Text(track.artistNames)
-                            .font(isCompact ? .footnote : .system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        if !allowsArtistNavigation {
+                            Text(track.artistNames)
+                                .font(isCompact ? .footnote : .system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -112,6 +115,9 @@ struct TrackRow: View {
                 .buttonStyle(.plain)
                 .disabled(!isPlayable)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                if allowsArtistNavigation {
+                    artistLinks
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -201,6 +207,35 @@ struct TrackRow: View {
             CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
                 .frame(width: 42, height: 42)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private var artistLinks: some View {
+        let artists = track.artists.filter { $0.id > 0 && !$0.name.isEmpty }
+        if artists.isEmpty {
+            Text(track.artistNames)
+                .font(isCompact ? .footnote : .system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(artists.enumerated()), id: \.offset) { index, artist in
+                    if index > 0 {
+                        Text(" / ")
+                    }
+                    Button {
+                        openDestination(.artist(artist.id))
+                    } label: {
+                        Text(artist.name)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("打开歌手：\(artist.name)")
+                }
+            }
+            .font(isCompact ? .footnote : .system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
     }
 
@@ -590,6 +625,7 @@ private struct TrackDownloadProgressView: View {
 struct TrackListView: View {
     let tracks: [Track]
     var style: TrackRowStyle = .full
+    var allowsArtistNavigation: Bool = true
     var downloadAction: TrackDownloadAction = .automatic
     var privileges: [Int: TrackPrivilege] = [:]
     var source: PlaySource = .none
@@ -611,6 +647,7 @@ struct TrackListView: View {
                     track: track,
                     index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
                     style: style,
+                    allowsArtistNavigation: allowsArtistNavigation,
                     downloadAction: downloadAction,
                     playability: playability(of: track),
                     removableFromPlaylistID: removableFromPlaylistID,

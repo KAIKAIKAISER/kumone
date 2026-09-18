@@ -126,6 +126,7 @@ struct PlaylistDetailView: View {
                     } else {
                         TrackListView(
                             tracks: model.filteredTracks,
+                            allowsArtistNavigation: false,
                             privileges: model.privileges,
                             source: .playlist(playlistID),
                             context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
