@@ -109,25 +109,11 @@ struct TrackRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if style == .full && !isCompact {
-                if track.album.id > 0, !track.album.name.isEmpty {
-                    Button {
-                        openDestination(.album(track.album.id))
-                    } label: {
-                        Text(track.album.name)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("打开专辑：\(track.album.name)")
+                Text(track.album.name)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                     .frame(maxWidth: 220, alignment: .leading)
-                } else {
-                    Text(track.album.name)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: 220, alignment: .leading)
-                }
             }
 
             if let reason = playability.reason {
