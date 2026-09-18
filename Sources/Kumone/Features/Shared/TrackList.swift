@@ -103,6 +103,7 @@ struct TrackRow: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!isPlayable)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 artistLinks
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -156,16 +157,11 @@ struct TrackRow: View {
             RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
                 .fill(isHovering ? Color.primary.opacity(0.06) : .clear)
         )
-        .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(AppAnimation.quick) { isHovering = hovering }
         }
         #if os(macOS)
         .onTapGesture(count: 2) {
-            if isPlayable { onPlay() }
-        }
-        #else
-        .onTapGesture {
             if isPlayable { onPlay() }
         }
         #endif
