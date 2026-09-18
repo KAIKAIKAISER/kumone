@@ -20,7 +20,9 @@ struct PlayerBar: View {
         .frame(height: Theme.Layout.playerBarHeight)
         .compatGlass(interactive: true, in: Capsule())
         .overlay(Capsule().strokeBorder(.primary.opacity(0.06), lineWidth: 0.5))
-        .padding(.horizontal, 16)
+        // Keep the capsule clear of the window's rounded corners so the inner
+        // and outer radii don't visually merge (#88).
+        .padding(.horizontal, 20)
         .padding(.bottom, Theme.Layout.playerBarBottomMargin)
         .background(alignment: .bottom) { bottomFade }
     }
@@ -67,6 +69,7 @@ struct PlayerBar: View {
                 .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
         }
         .buttonStyle(.pressable)
+        .noFocusRing()
         .help("打开播放页")
     }
 

@@ -45,6 +45,29 @@ struct SettingsView: View {
                 Text("罗马音在歌词上方另起一行，汉字读音把假名标在汉字正上方；缺少官方罗马音时自动生成读音")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle("主界面环境色", isOn: $settings.showMainWindowAmbientBackground)
+                if settings.showMainWindowAmbientBackground {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("背景色强度")
+                            Spacer()
+                            Text("\(Int(settings.mainWindowAmbientBackgroundIntensity * 100))%")
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: $settings.mainWindowAmbientBackgroundIntensity,
+                            in: SettingsManager.mainWindowAmbientBackgroundIntensityRange,
+                            step: 0.1
+                        )
+                        HStack {
+                            Text("50%")
+                            Spacer()
+                            Text("150%")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
                 #if os(macOS)
                 Toggle("桌面歌词", isOn: $settings.showDesktopLyrics)
                 if settings.showDesktopLyrics {

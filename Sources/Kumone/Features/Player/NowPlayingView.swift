@@ -20,18 +20,24 @@ struct NowPlayingView: View {
     private struct AlbumSelection: Identifiable {
         let id: Int
     }
+    let onOpenDestination: (Destination) -> Void
 
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var settings: SettingsManager
+    #if os(macOS)
+    @EnvironmentObject private var artworkStore: NowPlayingArtworkStore
+    #endif
     #if os(iOS)
     @Environment(\.dismissNowPlayingAction) private var dismissNowPlayingAction
     @Environment(\.dismissNowPlayingDragAction) private var dismissNowPlayingDragAction
     #endif
 
-    @State private var artworkImage: PlatformImage?
-    @State private var colors: ArtworkColors = .fallback
+    #if os(iOS)
+    @State private var loadedArtworkImage: PlatformImage?
+    @State private var loadedArtworkColors: ArtworkColors = .fallback
+    #endif
     @State private var activeIndex: Int?
     @State private var isUserScrolling = false
     @State private var resumeTask: Task<Void, Never>?
@@ -113,16 +119,16 @@ struct NowPlayingView: View {
         .ignoresSafeArea()
         #endif
         .preferredColorScheme(.dark)
-        .onAppear {
-            #if os(iOS)
-            showLyricsOnMobile = player.mobileNowPlayingShowsLyrics
-                || settings.nowPlayingMode == .immersive
-            showQueueOnMobile = false
-            #endif
-        }
+        #if os(iOS)
         .task(id: player.currentTrack?.id) {
             await loadArtwork()
         }
+        .onAppear {
+            showLyricsOnMobile = player.mobileNowPlayingShowsLyrics
+                || settings.nowPlayingMode == .immersive
+            showQueueOnMobile = false
+        }
+        #endif
         .sheet(item: $selectedArtist) { artist in
             NavigationStack {
                 ArtistDetailView(artistID: artist.id)
@@ -227,6 +233,22 @@ struct NowPlayingView: View {
 
     // MARK: - Backdrop
 
+    private var artworkImage: PlatformImage? {
+        #if os(macOS)
+        artworkStore.artwork
+        #else
+        loadedArtworkImage
+        #endif
+    }
+
+    private var colors: ArtworkColors {
+        #if os(macOS)
+        artworkStore.colors
+        #else
+        loadedArtworkColors
+        #endif
+    }
+
     private var backdrop: some View {
         ZStack {
             LinearGradient(
@@ -246,18 +268,20 @@ struct NowPlayingView: View {
         .animation(.easeInOut(duration: 0.8), value: colors)
     }
 
+    #if os(iOS)
     private func loadArtwork() async {
         guard let urlString = player.currentTrack?.album.picUrl,
               let url = urlString.resizedImageURL(768) else {
-            artworkImage = nil
-            colors = .fallback
+            loadedArtworkImage = nil
+            loadedArtworkColors = .fallback
             return
         }
         if let image = await ImageCache.shared.image(for: url) {
-            artworkImage = image
-            colors = ArtworkPalette.extract(from: image, cacheKey: urlString)
+            loadedArtworkImage = image
+            loadedArtworkColors = ArtworkPalette.extract(from: image, cacheKey: urlString)
         }
     }
+    #endif
 
     // MARK: - Layouts
 
@@ -265,6 +289,11 @@ struct NowPlayingView: View {
         // Everything below the artwork needs ~300pt; shrink the artwork on
         // short displays (iPhone landscape) instead of clipping it.
         let artworkSize = max(120, min(340, size.width * 0.32, size.height - 300))
+        // Cap the two-column band and centre it. Spreading each column to
+        // `.infinity` across an ultra-wide display (iPad landscape, ~1368pt)
+        // left the left column's content floating in an oversized half and a
+        // wide blank gutter on the right (#62).
+        let maxBandWidth: CGFloat = hasLyricsColumn ? 1040 : 560
         return HStack(spacing: 0) {
             leftColumn(artworkSize: artworkSize)
                 .frame(maxWidth: .infinity)
@@ -273,6 +302,8 @@ struct NowPlayingView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+        .frame(maxWidth: maxBandWidth)
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 48)
         .padding(.vertical, size.height < 500 ? 24 : 40)
     }
@@ -310,7 +341,10 @@ struct NowPlayingView: View {
                 height: NowPlayingPresentationMetrics.immersiveHeaderTopInset
             )
 
-            CompactTrackHeader(showsExpandedArtwork: showsVinyl)
+            CompactTrackHeader(
+                showsExpandedArtwork: showsVinyl,
+                onOpenDestination: onOpenDestination
+            )
                 .padding(.bottom, 10)
             #else
             Spacer().frame(height: 30)
@@ -347,7 +381,7 @@ struct NowPlayingView: View {
                                 showLyricsOnMobile = true
                             }
                         })
-                        .frame(maxWidth: .infinity, maxHeight: 70)
+                        .frame(maxWidth: .infinity, minHeight: 70)
 
                         Spacer(minLength: 0)
                     }
@@ -455,8 +489,12 @@ struct NowPlayingView: View {
                 )
             )
 
-            CompactTrackHeader(showsExpandedArtwork: showsExpandedArtwork)
-                .padding(.bottom, 14)
+            CompactTrackHeader(
+                showsExpandedArtwork: showsExpandedArtwork,
+                onOpenDestination: onOpenDestination,
+                onTapArtwork: collapseImmersiveArtwork
+            )
+            .padding(.bottom, 14)
 
             ZStack {
                 immersiveArtworkContent(artworkDimension: artworkDimension)
@@ -530,7 +568,7 @@ struct NowPlayingView: View {
                     value: .bounds
                 ) { [.expanded: $0] }
             MiniLyricsView(onOpen: showImmersiveLyrics)
-                .frame(maxWidth: .infinity, maxHeight: 96)
+                .frame(maxWidth: .infinity, minHeight: 96)
             Spacer(minLength: 0)
         }
     }
@@ -582,6 +620,17 @@ struct NowPlayingView: View {
         }
     }
 
+    /// Tapping the top-left cover while lyrics/queue are up returns to the
+    /// expanded artwork — the Apple Music gesture requested in #50. Idempotent,
+    /// so a tap while already expanded is a harmless no-op.
+    private func collapseImmersiveArtwork() {
+        guard showLyricsOnMobile || showQueueOnMobile else { return }
+        withAnimation(ImmersiveArtworkTransition.animation) {
+            showLyricsOnMobile = false
+            showQueueOnMobile = false
+        }
+    }
+
     private func toggleImmersiveQueue() {
         withAnimation(ImmersiveArtworkTransition.animation) {
             showQueueOnMobile.toggle()
@@ -595,7 +644,10 @@ struct NowPlayingView: View {
         return VStack(spacing: 0) {
             ZStack(alignment: .top) {
                 Color.clear
-                MinimalTrackInfoRow(metadataOnly: true)
+                MinimalTrackInfoRow(
+                    onOpenDestination: onOpenDestination,
+                    metadataOnly: true
+                )
                     .padding(.top, NowPlayingPresentationMetrics.immersiveHeaderTopInset)
                     .opacity(showLyricsOnMobile ? 1 : 0)
                     .accessibilityHidden(!showLyricsOnMobile)
@@ -640,11 +692,14 @@ struct NowPlayingView: View {
     private var minimalControls: some View {
         VStack(spacing: 22) {
             ZStack {
-                MinimalTrackInfoRow()
+                MinimalTrackInfoRow(onOpenDestination: onOpenDestination)
                     .opacity(showLyricsOnMobile ? 0 : 1)
                     .allowsHitTesting(!showLyricsOnMobile)
                     .accessibilityHidden(showLyricsOnMobile)
-                MinimalTrackInfoRow(actionsOnly: true)
+                MinimalTrackInfoRow(
+                    onOpenDestination: onOpenDestination,
+                    actionsOnly: true
+                )
                     .opacity(showLyricsOnMobile ? 1 : 0)
                     .allowsHitTesting(showLyricsOnMobile)
                     .accessibilityHidden(!showLyricsOnMobile)
@@ -693,6 +748,23 @@ struct NowPlayingView: View {
 
     private func artworkView(size: CGFloat) -> some View {
         Group {
+            if let album = player.currentTrack?.album, album.id > 0, !album.name.isEmpty {
+                Button {
+                    onOpenDestination(.album(album.id))
+                } label: {
+                    artworkSurface(size: size)
+                }
+                .buttonStyle(.plain)
+                .noFocusRing()
+                .accessibilityLabel("打开专辑：\(album.name)")
+            } else {
+                artworkSurface(size: size)
+            }
+        }
+    }
+
+    private func artworkSurface(size: CGFloat) -> some View {
+        Group {
             if let artworkImage {
                 Image(platformImage: artworkImage)
                     .resizable()
@@ -739,15 +811,14 @@ struct NowPlayingView: View {
                     VIPBadge()
                 }
             }
-            HStack(spacing: 5) {
-                artistEntry
-                if let album = player.currentTrack?.album.name, !album.isEmpty {
-                    Text("— \(album)")
-                        .lineLimit(1)
-                }
+            if let track = player.currentTrack {
+                NowPlayingTrackDestinationLinks(
+                    track: track,
+                    font: .system(size: 13.5),
+                    color: .white.opacity(0.65),
+                    onOpenDestination: onOpenDestination
+                )
             }
-            .font(.system(size: 13.5))
-            .foregroundStyle(.white.opacity(0.65))
         }
         .frame(maxWidth: 400)
     }
@@ -1108,12 +1179,15 @@ private struct IOSImmersiveLyricsColumn: View {
                         LazyVStack(alignment: .leading, spacing: 22) {
                             Color.clear.frame(height: 72)
                             ForEach(lyrics.lines) { line in
-                                lyricLine(line, isActive: line.id == activeIndex)
-                                    .id(line.id)
+                                lyricLine(
+                                    line,
+                                    isActive: line.id == activeIndex
+                                )
+                                .id(line.id)
                             }
                             Color.clear.frame(height: 96)
                         }
-                        .padding(.horizontal, 2)
+                        .padding(.horizontal, 4)
                     }
                     .mask(edgeMask)
                     .accessibilityIdentifier("syncedLyricsScroll")
@@ -1134,16 +1208,17 @@ private struct IOSImmersiveLyricsColumn: View {
                     .simultaneousGesture(
                         DragGesture()
                             .onChanged { _ in
-                                guard !isUserScrolling else { return }
-                                resumeTask?.cancel()
                                 isUserScrolling = true
-                            }
-                            .onEnded { _ in
                                 resumeTask?.cancel()
-                                resumeTask = Task {
+                                resumeTask = Task { @MainActor in
                                     try? await Task.sleep(for: .seconds(3))
                                     guard !Task.isCancelled else { return }
                                     isUserScrolling = false
+                                    if let activeIndex {
+                                        withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                                            proxy.scrollTo(activeIndex, anchor: .center)
+                                        }
+                                    }
                                 }
                             }
                     )
@@ -1180,7 +1255,9 @@ private struct IOSImmersiveLyricsColumn: View {
         activeIndex = index
         guard let index else { return }
         DispatchQueue.main.async {
-            proxy.scrollTo(index, anchor: .center)
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                proxy.scrollTo(index, anchor: .center)
+            }
         }
     }
 
@@ -1205,28 +1282,31 @@ private struct IOSImmersiveLyricsColumn: View {
                 if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
                     Text(romaji)
                         .font(.system(size: isActive ? 15 : 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
+                        .foregroundStyle(.white.opacity(isActive ? 0.75 : 0.4))
                 }
 
                 LyricMainText(
-                    line: line, isActive: isActive,
-                    size: 27, weight: isActive ? .bold : .semibold,
+                    line: line,
+                    isActive: isActive,
+                    size: isActive ? 26 : 21,
+                    weight: isActive ? .bold : .semibold,
                     verbatim: settings.verbatimLyrics
                 )
 
                 if settings.showLyricsTranslation, let translation = line.translation {
                     Text(translation)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
+                        .font(.system(size: isActive ? 16 : 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(isActive ? 0.75 : 0.4))
                 }
             }
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .scaleEffect(isActive ? 1.07 : 0.82, anchor: .leading)
+            .blur(radius: isActive ? 0 : 0.4)
+            .scaleEffect(isActive ? 1.02 : 1.0, anchor: .leading)
         }
         .buttonStyle(.plain)
-        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: isActive)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isActive)
     }
 }
 
@@ -1271,6 +1351,11 @@ private struct CompactTrackHeader: View {
     @State private var selectedArtist: ArtistRef?
 
     let showsExpandedArtwork: Bool
+    let onOpenDestination: (Destination) -> Void
+    /// Tap handler for the compact cover (used to collapse lyrics back to
+    /// artwork). The real image floats above this placeholder with hit-testing
+    /// disabled, so taps land here.
+    var onTapArtwork: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: ImmersiveArtworkTransition.compactHeaderSpacing) {
@@ -1283,6 +1368,8 @@ private struct CompactTrackHeader: View {
                     key: ImmersiveArtworkFramePreferenceKey.self,
                     value: .bounds
                 ) { [.compact: $0] }
+                .contentShape(Rectangle())
+                .onTapGesture { onTapArtwork?() }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -1294,8 +1381,14 @@ private struct CompactTrackHeader: View {
                         VIPBadge()
                     }
                 }
-                artistEntry
-                    .font(.subheadline)
+                if let track = player.currentTrack {
+                    NowPlayingTrackDestinationLinks(
+                        track: track,
+                        font: .subheadline,
+                        color: .white.opacity(0.62),
+                        onOpenDestination: onOpenDestination
+                    )
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .offset(
@@ -1335,6 +1428,12 @@ private struct CompactTrackHeader: View {
                         }
 
                         Divider()
+
+                        #if os(iOS)
+                        SleepTimerMenu(player: player)
+
+                        Divider()
+                        #endif
 
                         Button {
                             Platform.copyToPasteboard(
@@ -1974,6 +2073,7 @@ private struct MinimalTrackInfoRow: View {
     @EnvironmentObject private var account: AccountStore
     @State private var showAddToPlaylist = false
     @State private var airPlayRequest = 0
+    let onOpenDestination: (Destination) -> Void
     var metadataOnly = false
     var actionsOnly = false
 
@@ -2023,10 +2123,14 @@ private struct MinimalTrackInfoRow: View {
                     VIPBadge()
                 }
             }
-            Text(player.currentTrack?.artistNames ?? "")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.62))
-                .lineLimit(1)
+            if let track = player.currentTrack {
+                NowPlayingTrackDestinationLinks(
+                    track: track,
+                    font: .footnote,
+                    color: .white.opacity(0.62),
+                    onOpenDestination: onOpenDestination
+                )
+            }
         }
         .multilineTextAlignment(textAlignment)
         .accessibilityElement(children: .contain)
@@ -2069,6 +2173,12 @@ private struct MinimalTrackInfoRow: View {
             }
 
             Divider()
+
+            #if os(iOS)
+            SleepTimerMenu(player: player)
+
+            Divider()
+            #endif
 
             Button {
                 Platform.copyToPasteboard(
@@ -2407,6 +2517,7 @@ struct MiniLyricsView: View {
     let onOpen: () -> Void
 
     @EnvironmentObject private var player: PlayerService
+    @EnvironmentObject private var settings: SettingsManager
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
 
     private var lines: (previous: LyricLine?, current: LyricLine?, next: LyricLine?) {
@@ -2443,13 +2554,43 @@ struct MiniLyricsView: View {
 
     @ViewBuilder
     private func line(_ line: LyricLine?, emphasized: Bool) -> some View {
-        Text(line?.text.isEmpty == false ? line!.text : " ")
-            .font(.system(size: emphasized ? 17 : 14, weight: emphasized ? .bold : .medium))
-            .foregroundStyle(.white.opacity(emphasized ? 1 : 0.45))
-            .lineLimit(1)
+        VStack(spacing: emphasized ? 3 : 1) {
+            lyricText(
+                line?.text.isEmpty == false ? line!.text : " ",
+                emphasized: emphasized,
+                translation: false
+            )
+
+            if settings.showLyricsTranslation,
+               let translation = line?.translation?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !translation.isEmpty {
+                lyricText(translation, emphasized: emphasized, translation: true)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 28)
+        .id(line?.id)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    @ViewBuilder
+    private func lyricText(_ text: String, emphasized: Bool, translation: Bool) -> some View {
+        let fontSize: CGFloat = translation
+            ? (emphasized ? 13 : 11)
+            : (emphasized ? 17 : 14)
+
+        Text(text)
+            .font(.system(size: fontSize, weight: emphasized ? .bold : .medium))
+            .foregroundStyle(.white.opacity(
+                translation
+                    ? (emphasized ? 0.72 : 0.38)
+                    : (emphasized ? 1 : 0.45)
+            ))
+            // The active line is allowed to wrap instead of being silently
+            // truncated. Inactive rows stay single-line so the three-line
+            // preview remains compact.
+            .lineLimit(emphasized ? nil : 1)
+            .fixedSize(horizontal: false, vertical: true)
             .multilineTextAlignment(.center)
-            .padding(.horizontal, 28)
-            .id(line?.id)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 }

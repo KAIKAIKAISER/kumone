@@ -105,6 +105,8 @@ final class SettingsManager: ObservableObject {
         static let autoCheckUpdates = "settings.autoCheckUpdates"
         static let desktopLyrics = "settings.showDesktopLyrics"
         static let desktopLyricsCentered = "settings.desktopLyricsCentered"
+        static let mainWindowAmbientBackground = "settings.showMainWindowAmbientBackground"
+        static let mainWindowAmbientBackgroundIntensity = "settings.mainWindowAmbientBackgroundIntensity"
     }
 
     @Published var audioQuality: AudioQuality {
@@ -162,6 +164,27 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(desktopLyricsCentered, forKey: Keys.desktopLyricsCentered) }
     }
 
+    static let mainWindowAmbientBackgroundIntensityRange = 0.5...1.5
+
+    /// Artwork-tinted overlay on the main app interface.
+    @Published var showMainWindowAmbientBackground: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                showMainWindowAmbientBackground,
+                forKey: Keys.mainWindowAmbientBackground
+            )
+        }
+    }
+
+    /// Multiplier applied to the main interface's artwork tint.
+    @Published var mainWindowAmbientBackgroundIntensity: Double {
+        didSet {
+            UserDefaults.standard.set(
+                mainWindowAmbientBackgroundIntensity,
+                forKey: Keys.mainWindowAmbientBackgroundIntensity
+            )
+        }
+    }
     private init() {
         let defaults = UserDefaults.standard
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
@@ -176,5 +199,15 @@ final class SettingsManager: ObservableObject {
         autoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) as? Bool ?? true
         showDesktopLyrics = defaults.object(forKey: Keys.desktopLyrics) as? Bool ?? false
         desktopLyricsCentered = defaults.object(forKey: Keys.desktopLyricsCentered) as? Bool ?? false
+        showMainWindowAmbientBackground = defaults.object(
+            forKey: Keys.mainWindowAmbientBackground
+        ) as? Bool ?? true
+        let storedAmbientBackgroundIntensity = defaults.object(
+            forKey: Keys.mainWindowAmbientBackgroundIntensity
+        ) as? Double ?? 1
+        mainWindowAmbientBackgroundIntensity = min(
+            max(storedAmbientBackgroundIntensity, Self.mainWindowAmbientBackgroundIntensityRange.lowerBound),
+            Self.mainWindowAmbientBackgroundIntensityRange.upperBound
+        )
     }
 }

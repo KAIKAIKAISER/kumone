@@ -18,12 +18,18 @@ enum TrackDownloadAction: Equatable {
     case hidden
 }
 
+enum RecommendationContext {
+    case daily
+    case radar
+}
+
 // MARK: - Row
 
 struct TrackRow: View {
     let track: Track
     let index: Int
     var style: TrackRowStyle = .full
+    var allowsArtistNavigation: Bool = true
     var downloadAction: TrackDownloadAction = .automatic
     var playability: TrackPlayability = .playable
     /// Extra trailing text (e.g. play count for recents).
@@ -31,10 +37,12 @@ struct TrackRow: View {
     /// Set when the row lives inside a user's own playlist (enables 删除).
     var removableFromPlaylistID: Int?
     var onRemoved: (() -> Void)?
+    var onRecommendationReduced: ((Track) -> Void)?
     let onPlay: () -> Void
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
+    @Environment(\.openDestination) private var openDestination
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @ObservedObject private var downloads = DownloadManager.shared
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
@@ -42,6 +50,7 @@ struct TrackRow: View {
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
     @State private var isHovering = false
     @State private var showAddToPlaylist = false
+    @State private var isReducingRecommendation = false
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
     private var isPlayable: Bool { playability == .playable }
@@ -74,37 +83,50 @@ struct TrackRow: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(track.name)
-                        .font(isCompact ? .callout.weight(.medium) : .system(size: 13, weight: .medium))
-                        .foregroundStyle(isCurrent ? Theme.accent : .primary)
-                        .lineLimit(1)
-                    if let subtitle = track.subtitle, !isCompact {
-                        Text("(\(subtitle))")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                Button {
+                    if isPlayable { onPlay() }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(track.name)
+                                .font(isCompact ? .callout.weight(.medium) : .system(size: 13, weight: .medium))
+                                .foregroundStyle(isCurrent ? Theme.accent : .primary)
+                                .lineLimit(1)
+                            if let subtitle = track.subtitle, !isCompact {
+                                Text("(\(subtitle))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            if track.fee == 1 {
+                                VIPBadge()
+                            }
+                        }
+                        if !allowsArtistNavigation {
+                            Text(track.artistNames)
+                                .font(isCompact ? .footnote : .system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
-                    if track.fee == 1 {
-                        VIPBadge()
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                Text(track.artistNames)
-                    .font(isCompact ? .footnote : .system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                .buttonStyle(.plain)
+                .disabled(!isPlayable)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if allowsArtistNavigation {
+                    artistLinks
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if style == .full && !isCompact {
-                NavigationLink(value: Destination.album(track.album.id)) {
-                    Text(track.album.name)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .buttonStyle(.plain)
-                .frame(maxWidth: 220, alignment: .leading)
+                Text(track.album.name)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 220, alignment: .leading)
             }
 
             if let reason = playability.reason {
@@ -134,16 +156,11 @@ struct TrackRow: View {
             RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
                 .fill(isHovering ? Color.primary.opacity(0.06) : .clear)
         )
-        .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(AppAnimation.quick) { isHovering = hovering }
         }
         #if os(macOS)
         .onTapGesture(count: 2) {
-            if isPlayable { onPlay() }
-        }
-        #else
-        .onTapGesture {
             if isPlayable { onPlay() }
         }
         #endif
@@ -155,6 +172,21 @@ struct TrackRow: View {
 
     @ViewBuilder
     private var artwork: some View {
+        if track.album.id > 0, !track.album.name.isEmpty {
+            Button {
+                openDestination(.album(track.album.id))
+            } label: {
+                artworkImage
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("打开专辑：\(track.album.name)")
+        } else {
+            artworkImage
+        }
+    }
+
+    @ViewBuilder
+    private var artworkImage: some View {
         if isCompact {
             CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(160), animated: false)
                 .frame(width: compactArtworkSize, height: compactArtworkSize)
@@ -175,6 +207,35 @@ struct TrackRow: View {
             CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
                 .frame(width: 42, height: 42)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private var artistLinks: some View {
+        let artists = track.artists.filter { $0.id > 0 && !$0.name.isEmpty }
+        if artists.isEmpty {
+            Text(track.artistNames)
+                .font(isCompact ? .footnote : .system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(artists.enumerated()), id: \.offset) { index, artist in
+                    if index > 0 {
+                        Text(" / ")
+                    }
+                    Button {
+                        openDestination(.artist(artist.id))
+                    } label: {
+                        Text(artist.name)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("打开歌手：\(artist.name)")
+                }
+            }
+            .font(isCompact ? .footnote : .system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
     }
 
@@ -302,15 +363,34 @@ struct TrackRow: View {
                 }
             }
         }
+        #if os(macOS)
+        if !account.isLiked(track.id), let onRecommendationReduced {
+            Button(String(localized: "减少推荐"), role: .destructive) {
+                guard !isReducingRecommendation else { return }
+                isReducingRecommendation = true
+                Task {
+                    defer { isReducingRecommendation = false }
+                    do {
+                        let replacement = try await NeteaseAPI.dislikeRecommendedSong(id: track.id)
+                        onRecommendationReduced(replacement)
+                        ToastCenter.shared.show(String(localized: "已减少推荐"))
+                    } catch {
+                        ToastCenter.shared.show(error.localizedDescription)
+                    }
+                }
+            }
+            .disabled(isReducingRecommendation)
+        }
+        #endif
         Divider()
         if track.album.id > 0 {
-            NavigationLink(value: Destination.album(track.album.id)) {
-                Text("查看专辑")
+            Button("查看专辑") {
+                openDestination(.album(track.album.id))
             }
         }
-        ForEach(track.artists.prefix(3)) { artist in
-            NavigationLink(value: Destination.artist(artist.id)) {
-                Text("查看歌手：\(artist.name)")
+        ForEach(track.artists.filter { $0.id > 0 && !$0.name.isEmpty }.prefix(3)) { artist in
+            Button("查看歌手：\(artist.name)") {
+                openDestination(.artist(artist.id))
             }
         }
         Divider()
@@ -545,6 +625,7 @@ private struct TrackDownloadProgressView: View {
 struct TrackListView: View {
     let tracks: [Track]
     var style: TrackRowStyle = .full
+    var allowsArtistNavigation: Bool = true
     var downloadAction: TrackDownloadAction = .automatic
     var privileges: [Int: TrackPrivilege] = [:]
     var source: PlaySource = .none
@@ -552,6 +633,8 @@ struct TrackListView: View {
     var context: PlayContext?
     var removableFromPlaylistID: Int?
     var onRemoved: ((Track) -> Void)?
+    var recommendationContext: RecommendationContext?
+    var onRecommendationReduced: ((Track, Track) -> Void)?
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -559,14 +642,19 @@ struct TrackListView: View {
     var body: some View {
         LazyVStack(spacing: 1) {
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                let recommendationHandler = onRecommendationReduced
                 TrackRow(
                     track: track,
                     index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
                     style: style,
+                    allowsArtistNavigation: allowsArtistNavigation,
                     downloadAction: downloadAction,
                     playability: playability(of: track),
                     removableFromPlaylistID: removableFromPlaylistID,
-                    onRemoved: { onRemoved?(track) }
+                    onRemoved: { onRemoved?(track) },
+                    onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
+                        ? nil
+                        : { replacement in recommendationHandler?(track, replacement) }
                 ) {
                     player.play(tracks: playableTracks, source: source, startAt: track,
                                 context: context)
