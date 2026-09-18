@@ -20,6 +20,7 @@ struct NowPlayingView: View {
     private struct AlbumSelection: Identifiable {
         let id: Int
     }
+    let onOpenDestination: (Destination) -> Void
 
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
@@ -340,7 +341,10 @@ struct NowPlayingView: View {
                 height: NowPlayingPresentationMetrics.immersiveHeaderTopInset
             )
 
-            CompactTrackHeader(showsExpandedArtwork: showsVinyl)
+            CompactTrackHeader(
+                showsExpandedArtwork: showsVinyl,
+                onOpenDestination: onOpenDestination
+            )
                 .padding(.bottom, 10)
             #else
             Spacer().frame(height: 30)
@@ -487,6 +491,7 @@ struct NowPlayingView: View {
 
             CompactTrackHeader(
                 showsExpandedArtwork: showsExpandedArtwork,
+                onOpenDestination: onOpenDestination,
                 onTapArtwork: collapseImmersiveArtwork
             )
             .padding(.bottom, 14)
@@ -639,7 +644,10 @@ struct NowPlayingView: View {
         return VStack(spacing: 0) {
             ZStack(alignment: .top) {
                 Color.clear
-                MinimalTrackInfoRow(metadataOnly: true)
+                MinimalTrackInfoRow(
+                    onOpenDestination: onOpenDestination,
+                    metadataOnly: true
+                )
                     .padding(.top, NowPlayingPresentationMetrics.immersiveHeaderTopInset)
                     .opacity(showLyricsOnMobile ? 1 : 0)
                     .accessibilityHidden(!showLyricsOnMobile)
@@ -684,11 +692,14 @@ struct NowPlayingView: View {
     private var minimalControls: some View {
         VStack(spacing: 22) {
             ZStack {
-                MinimalTrackInfoRow()
+                MinimalTrackInfoRow(onOpenDestination: onOpenDestination)
                     .opacity(showLyricsOnMobile ? 0 : 1)
                     .allowsHitTesting(!showLyricsOnMobile)
                     .accessibilityHidden(showLyricsOnMobile)
-                MinimalTrackInfoRow(actionsOnly: true)
+                MinimalTrackInfoRow(
+                    onOpenDestination: onOpenDestination,
+                    actionsOnly: true
+                )
                     .opacity(showLyricsOnMobile ? 1 : 0)
                     .allowsHitTesting(showLyricsOnMobile)
                     .accessibilityHidden(!showLyricsOnMobile)
@@ -737,6 +748,23 @@ struct NowPlayingView: View {
 
     private func artworkView(size: CGFloat) -> some View {
         Group {
+            if let album = player.currentTrack?.album, album.id > 0, !album.name.isEmpty {
+                Button {
+                    onOpenDestination(.album(album.id))
+                } label: {
+                    artworkSurface(size: size)
+                }
+                .buttonStyle(.plain)
+                .noFocusRing()
+                .accessibilityLabel("打开专辑：\(album.name)")
+            } else {
+                artworkSurface(size: size)
+            }
+        }
+    }
+
+    private func artworkSurface(size: CGFloat) -> some View {
+        Group {
             if let artworkImage {
                 Image(platformImage: artworkImage)
                     .resizable()
@@ -783,15 +811,14 @@ struct NowPlayingView: View {
                     VIPBadge()
                 }
             }
-            HStack(spacing: 5) {
-                artistEntry
-                if let album = player.currentTrack?.album.name, !album.isEmpty {
-                    Text("— \(album)")
-                        .lineLimit(1)
-                }
+            if let track = player.currentTrack {
+                NowPlayingTrackDestinationLinks(
+                    track: track,
+                    font: .system(size: 13.5),
+                    color: .white.opacity(0.65),
+                    onOpenDestination: onOpenDestination
+                )
             }
-            .font(.system(size: 13.5))
-            .foregroundStyle(.white.opacity(0.65))
         }
         .frame(maxWidth: 400)
     }
@@ -1324,6 +1351,7 @@ private struct CompactTrackHeader: View {
     @State private var selectedArtist: ArtistRef?
 
     let showsExpandedArtwork: Bool
+    let onOpenDestination: (Destination) -> Void
     /// Tap handler for the compact cover (used to collapse lyrics back to
     /// artwork). The real image floats above this placeholder with hit-testing
     /// disabled, so taps land here.
@@ -1353,8 +1381,14 @@ private struct CompactTrackHeader: View {
                         VIPBadge()
                     }
                 }
-                artistEntry
-                    .font(.subheadline)
+                if let track = player.currentTrack {
+                    NowPlayingTrackDestinationLinks(
+                        track: track,
+                        font: .subheadline,
+                        color: .white.opacity(0.62),
+                        onOpenDestination: onOpenDestination
+                    )
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .offset(
@@ -1394,6 +1428,12 @@ private struct CompactTrackHeader: View {
                         }
 
                         Divider()
+
+                        #if os(iOS)
+                        SleepTimerMenu(player: player)
+
+                        Divider()
+                        #endif
 
                         Button {
                             Platform.copyToPasteboard(
@@ -2033,6 +2073,7 @@ private struct MinimalTrackInfoRow: View {
     @EnvironmentObject private var account: AccountStore
     @State private var showAddToPlaylist = false
     @State private var airPlayRequest = 0
+    let onOpenDestination: (Destination) -> Void
     var metadataOnly = false
     var actionsOnly = false
 
@@ -2082,10 +2123,14 @@ private struct MinimalTrackInfoRow: View {
                     VIPBadge()
                 }
             }
-            Text(player.currentTrack?.artistNames ?? "")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.62))
-                .lineLimit(1)
+            if let track = player.currentTrack {
+                NowPlayingTrackDestinationLinks(
+                    track: track,
+                    font: .footnote,
+                    color: .white.opacity(0.62),
+                    onOpenDestination: onOpenDestination
+                )
+            }
         }
         .multilineTextAlignment(textAlignment)
         .accessibilityElement(children: .contain)
@@ -2128,6 +2173,12 @@ private struct MinimalTrackInfoRow: View {
             }
 
             Divider()
+
+            #if os(iOS)
+            SleepTimerMenu(player: player)
+
+            Divider()
+            #endif
 
             Button {
                 Platform.copyToPasteboard(
