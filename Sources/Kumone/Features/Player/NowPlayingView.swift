@@ -764,24 +764,25 @@ struct NowPlayingView: View {
     }
 
     private func artworkSurface(size: CGFloat) -> some View {
-        Group {
+        ZStack {
+            Rectangle()
+                .fill(.white.opacity(0.06))
+                .overlay(
+                    Image(systemName: "music.note")
+                        .font(.system(size: 48, weight: .light))
+                        .foregroundStyle(.white.opacity(0.3))
+                )
             if let artworkImage {
                 Image(platformImage: artworkImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-            } else {
-                Rectangle()
-                    .fill(.white.opacity(0.06))
-                    .overlay(
-                        Image(systemName: "music.note")
-                            .font(.system(size: 48, weight: .light))
-                            .foregroundStyle(.white.opacity(0.3))
-                    )
+                    .transition(.opacity)
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.45), radius: 36, y: 18)
+        .animation(.easeIn(duration: 0.25), value: artworkImage != nil)
         .scaleEffect(player.isPlaying ? 1 : 0.95)
         .animation(AppAnimation.bouncy, value: player.isPlaying)
     }
@@ -914,12 +915,16 @@ struct NowPlayingView: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
+                // All three queue orders on the one button; the cycle skips
+                // AutoMix wherever it could do nothing (AutoMix off, order
+                // off), so this row keeps its present width and its two-state
+                // behaviour there — as it does on iOS, which has no AutoMix at
+                // all. Only the three values below differ per platform.
                 circleButton(
-                    icon: "shuffle", size: 14,
-                    tint: player.shuffleEnabled ? Theme.accent : nil
-                ) {
-                    player.toggleShuffle()
-                }
+                    icon: queueOrderIcon, size: 14,
+                    tint: queueOrderIsActive ? Theme.accent : nil,
+                    action: cycleQueueOrder
+                )
                 .frame(maxWidth: .infinity)
                 circleButton(icon: "backward.fill", size: 16) {
                     player.previous()
@@ -973,6 +978,35 @@ struct NowPlayingView: View {
             }
         }
         .buttonStyle(.pressable)
+    }
+
+    // MARK: - Queue-order control
+
+    /// The queue-order button's three platform-dependent values. macOS cycles
+    /// `listed → shuffled → autoMix`; iOS has no AutoMix and toggles shuffle.
+
+    private var queueOrderIcon: String {
+        #if os(macOS)
+        player.queueOrder.symbolName
+        #else
+        "shuffle"
+        #endif
+    }
+
+    private var queueOrderIsActive: Bool {
+        #if os(macOS)
+        player.queueOrder != .listed
+        #else
+        player.shuffleEnabled
+        #endif
+    }
+
+    private func cycleQueueOrder() {
+        #if os(macOS)
+        player.cycleQueueOrder()
+        #else
+        player.toggleShuffle()
+        #endif
     }
 
     private func circleButton(icon: String, size: CGFloat,
@@ -1547,8 +1581,8 @@ private struct CompactTransportControls: View {
     }
 }
 
+#if os(iOS)
 private struct CompactSecondaryControls: View {
-    @EnvironmentObject private var player: PlayerService
     let showsLyrics: Bool
     let showsQueue: Bool
     let onToggleLyrics: () -> Void
@@ -1592,6 +1626,18 @@ private struct CompactSecondaryControls: View {
         .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
+
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.closeSubpath()
+        }
+    }
+}
+#endif
 
 private struct CompactQueueContent: View {
     @EnvironmentObject private var player: PlayerService
