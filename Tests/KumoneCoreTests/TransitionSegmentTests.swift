@@ -138,6 +138,16 @@ extension PlaybackEngineSmokeTests {
 
 @Suite("TransitionSegment")
 struct TransitionSegmentTests {
+    @Test func segmentEventCollectorReleasesWhileTheEngineStreamIsOpen() {
+        let engine = PlaybackEngine()
+        weak var releasedCollector: SegmentEventLog?
+        do {
+            let collector = SegmentEventLog(engine)
+            releasedCollector = collector
+        }
+        #expect(releasedCollector == nil, "The event task must not retain its collector")
+        withExtendedLifetime(engine) {}
+    }
 
     // The splice's whole contract in one test: where the segment starts on the
     // outgoing track, where it hands back on the incoming one, and that its two
@@ -858,8 +868,8 @@ private final class SegmentEventLog: @unchecked Sendable {
     private var task: Task<Void, Never>?
 
     init(_ engine: PlaybackEngine) {
-        task = Task {
-            for await event in engine.events { self.append(event) }
+        task = Task { [weak self, stream = engine.events] in
+            for await event in stream { self?.append(event) }
         }
     }
 

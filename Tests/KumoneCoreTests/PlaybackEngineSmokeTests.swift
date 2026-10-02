@@ -346,9 +346,12 @@ private final class EventLog: @unchecked Sendable {
     private var task: Task<Void, Never>?
 
     init(_ engine: PlaybackEngine) {
-        task = Task {
-            for await event in engine.events {
-                self.append(event)
+        // A strong self/engine capture makes the collector own a task which
+        // owns the collector and the running audio graph. Keep only the stream
+        // and a weak collector so teardown can cancel the consumer.
+        task = Task { [weak self, stream = engine.events] in
+            for await event in stream {
+                self?.append(event)
             }
         }
     }
@@ -442,6 +445,16 @@ private func pollPosition(_ engine: PlaybackEngine, deck: Deck, past target: Tim
 
 @Suite("PlaybackEngineSmoke", .serialized)
 struct PlaybackEngineSmokeTests {
+    @Test func eventCollectorReleasesWhileTheEngineStreamIsOpen() {
+        let engine = PlaybackEngine()
+        weak var releasedCollector: EventLog?
+        do {
+            let collector = EventLog(engine)
+            releasedCollector = collector
+        }
+        #expect(releasedCollector == nil, "The event task must not retain its collector")
+        withExtendedLifetime(engine) {}
+    }
 
     // (a) Local file deck: position advances, deckFinished on natural end.
     @Test func filePlaybackAdvancesAndFinishes() throws {
