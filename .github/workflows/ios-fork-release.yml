@@ -54,6 +54,14 @@ jobs:
           ditto -c -k --keepParent "$RUNNER_TEMP/ipa/Payload" "dist/$ASSET_NAME"
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
 
+      - name: Preserve compiled IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: dist/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publish fork release
         run: |
           NOTES="$RUNNER_TEMP/release-notes.md"

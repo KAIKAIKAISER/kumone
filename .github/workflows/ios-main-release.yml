@@ -72,6 +72,14 @@ jobs:
             echo "ASSET_NAME=$ASSET_NAME"
           } >> "$GITHUB_ENV"
 
+      - name: Preserve compiled IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: dist/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publish GitHub pre-release
         run: |
           TAG="ios-main-${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
