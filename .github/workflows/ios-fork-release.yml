@@ -33,7 +33,7 @@ jobs:
           fetch-depth: 0
 
       - name: Test core package
-        run: swift test
+        run: bash Scripts/test-core.sh
 
       - name: Build unsigned iOS IPA
         run: |
