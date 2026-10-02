@@ -372,9 +372,16 @@ final class DownloadManager: ObservableObject {
             )
         }
 
-        if SettingsManager.shared.enableUnblock,
-           let unblocked = await UnblockService.resolve(track) {
-            return ResolvedSource(url: unblocked.url, fileExtension: "mp3")
+        if SettingsManager.shared.canResolveUnblockedTracks {
+            let resolution = await UnblockService.resolve(
+                track,
+                enabledSources: SettingsManager.shared.enabledAudioSourceIDs,
+                excluding: []
+            )
+            if let unblocked = resolution.source {
+                let ext = unblocked.url.pathExtension.lowercased()
+                return ResolvedSource(url: unblocked.url, fileExtension: ext.isEmpty ? "mp3" : ext)
+            }
         }
         throw DownloadError.sourceUnavailable
     }

@@ -4,10 +4,19 @@ private struct OpenLoginKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
 
+private struct OpenDestinationKey: EnvironmentKey {
+    static let defaultValue: (Destination) -> Void = { _ in }
+}
+
 extension EnvironmentValues {
     var openLogin: () -> Void {
         get { self[OpenLoginKey.self] }
         set { self[OpenLoginKey.self] = newValue }
+    }
+
+    var openDestination: (Destination) -> Void {
+        get { self[OpenDestinationKey.self] }
+        set { self[OpenDestinationKey.self] = newValue }
     }
 }
 
@@ -50,6 +59,7 @@ enum SidebarItem: Hashable {
     case home
     case explore
     case fm
+    case search
     case likedSongs
     case daily
     case recents
@@ -61,6 +71,7 @@ enum SidebarItem: Hashable {
 
 enum Destination: Hashable {
     case playlist(Int)
+    case radarPlaylist(Int)
     case album(Int)
     case artist(Int)
     case daily
@@ -72,6 +83,13 @@ enum Destination: Hashable {
     case search(String)
 }
 
+extension Array where Element == Destination {
+    mutating func appendIfNotCurrent(_ destination: Destination) {
+        guard last != destination else { return }
+        append(destination)
+    }
+}
+
 /// Registers all shared navigation destinations on a stack.
 struct DestinationsModifier: ViewModifier {
     func body(content: Content) -> some View {
@@ -80,6 +98,8 @@ struct DestinationsModifier: ViewModifier {
                 switch destination {
                 case .playlist(let id):
                     PlaylistDetailView(playlistID: id)
+                case .radarPlaylist(let id):
+                    PlaylistDetailView(playlistID: id, recommendationContext: .radar)
                 case .album(let id):
                     AlbumDetailView(albumID: id)
                 case .artist(let id):
@@ -125,11 +145,27 @@ extension View {
 /// Trailing spacer for scrollable pages so the last row clears the
 /// floating player bar.
 struct PlayerClearanceSpacer: View {
+    @EnvironmentObject private var player: PlayerService
+
     var body: some View {
         #if os(iOS)
-        Color.clear.frame(height: 80) // mini player bar above the tab bar
+        if #available(iOS 26.0, *) {
+            // On iOS 26+, the native TabView bottom accessory automatically
+            // expands the content safe area insets; keep only the breathing margin.
+            Color.clear.frame(height: Theme.Layout.scrollBreathingMargin)
+        } else {
+            // On iOS < 26, customTabInterface floats above content and requires
+            // explicit bottom clearance.
+            Color.clear.frame(
+                height: player.hasCurrentTrack
+                    ? Theme.Layout.FloatingChrome.fullChromeClearance
+                    : Theme.Layout.FloatingChrome.tabBarClearance
+            )
+        }
         #else
-        Color.clear.frame(height: Theme.Layout.playerChromeClearance + 8)
+        Color.clear.frame(
+            height: Theme.Layout.playerChromeClearance + Theme.Layout.scrollBreathingMargin
+        )
         #endif
     }
 }

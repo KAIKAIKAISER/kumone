@@ -180,7 +180,7 @@ struct HomeView: View {
             if !model.radarPlaylists.isEmpty {
                 Shelf(title: "雷达歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.radarPlaylists) { radar in
-                        NavigationLink(value: Destination.playlist(radar.id)) {
+                        NavigationLink(value: Destination.radarPlaylist(radar.id)) {
                             CoverCardBody(
                                 coverURL: radar.coverURL?.resizedImageURL(384),
                                 title: radar.title,
@@ -460,23 +460,24 @@ struct CoverCardBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .bottomLeading) {
-                artwork
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
-                            .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
-                    )
-                if playCount > 0 {
-                    PlayCountBadge(count: playCount)
-                        .padding(6)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            artwork
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
+                        .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+                )
+                .overlay(alignment: .topTrailing) {
+                    if playCount > 0 {
+                        PlayCountBadge(count: playCount)
+                            .padding(6)
+                    }
                 }
-                if let onPlay {
-                    PlayOverlayButton(visible: isHovering, action: onPlay)
-                        .padding(8)
+                .overlay(alignment: .bottomLeading) {
+                    if let onPlay {
+                        PlayOverlayButton(visible: isHovering, action: onPlay)
+                            .padding(8)
+                    }
                 }
-            }
 
             Text(title)
                 .font(.system(size: 13, weight: .medium))
