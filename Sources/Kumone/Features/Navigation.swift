@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension Notification.Name {
+    static let showDownloadedMusic = Notification.Name("Kumone.showDownloadedMusic")
+}
+
 private struct OpenLoginKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
@@ -56,6 +60,7 @@ struct PlayerChromeModifier: ViewModifier {
 }
 
 enum SidebarItem: Hashable {
+    case downloaded
     case home
     case explore
     case fm
@@ -70,6 +75,7 @@ enum SidebarItem: Hashable {
 }
 
 enum Destination: Hashable {
+    case downloaded, downloadTasks
     case playlist(Int)
     case radarPlaylist(Int)
     case album(Int)
@@ -96,6 +102,10 @@ struct DestinationsModifier: ViewModifier {
         content.navigationDestination(for: Destination.self) { destination in
             Group {
                 switch destination {
+                case .downloaded:
+                    DownloadedMusicView()
+                case .downloadTasks:
+                    DownloadTasksView()
                 case .playlist(let id):
                     PlaylistDetailView(playlistID: id)
                 case .radarPlaylist(let id):
@@ -115,7 +125,7 @@ struct DestinationsModifier: ViewModifier {
                 case .cloud:
                     CloudView()
                 case .downloads:
-                    DownloadsView()
+                    DownloadedMusicView()
                 case .search(let query):
                     SearchView(query: query)
                 }

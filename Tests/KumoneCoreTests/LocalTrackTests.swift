@@ -36,4 +36,20 @@ struct LocalTrackTests {
         #expect(restored.album.name == "Local Album")
         #expect(restored.durationMS == 185_250)
     }
+
+    @Test("Preserves upstream offline-playback flags alongside local track fields")
+    func cloudTrackCodingRoundTrip() throws {
+        let source = Data("""
+        {"id":123,"name":"Cloud Song","ar":[{"id":1,"name":"Artist"}],
+         "al":{"id":2,"name":"Album"},"dt":180000,
+         "pc":{},"noCopyrightRcmd":{},"privilege":{"id":123}}
+        """.utf8)
+        let track = try JSONDecoder().decode(Track.self, from: source)
+        let restored = try JSONDecoder().decode(Track.self, from: JSONEncoder().encode(track))
+
+        #expect(restored.isCloud)
+        #expect(restored.noCopyright)
+        #expect(restored.embeddedPrivilege?.id == 123)
+        #expect(!restored.isLocal)
+    }
 }
