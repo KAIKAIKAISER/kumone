@@ -158,6 +158,9 @@ struct AlbumDetailView: View {
                 }
                 .buttonStyle(.pressable)
 
+                DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)",
+                                         name: album.name, compact: true)
+
                 if account.isLoggedIn {
                     Button {
                         toggleSubscribe()
@@ -221,6 +224,9 @@ struct AlbumDetailView: View {
                             .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                     }
                     .buttonStyle(.pressable)
+
+                    DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)",
+                                             name: album.name)
 
                     if account.isLoggedIn {
                         Button {

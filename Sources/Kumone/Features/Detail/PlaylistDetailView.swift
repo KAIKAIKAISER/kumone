@@ -1,83 +1,12 @@
 import SwiftUI
 
-@MainActor
-final class PlaylistDetailViewModel: ObservableObject {
-    let playlistID: Int
-    @Published var detail: PlaylistDetail?
-    @Published var tracks: [Track] = []
-    @Published var privileges: [Int: TrackPrivilege] = [:]
-    @Published var isLoading = true
-    @Published var isLoadingMore = false
-    @Published var errorMessage: String?
-    @Published var filter = ""
-    private var reducedRecommendationIDs: Set<Int> = []
-
-    init(playlistID: Int) {
-        self.playlistID = playlistID
-    }
-
-    var filteredTracks: [Track] {
-        let query = filter.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !query.isEmpty else { return tracks }
-        return tracks.filter {
-            $0.name.lowercased().contains(query)
-                || $0.artistNames.lowercased().contains(query)
-                || $0.album.name.lowercased().contains(query)
-        }
-    }
-
-    func load() async {
-        isLoading = tracks.isEmpty
-        errorMessage = nil
-        do {
-            let response = try await NeteaseAPI.playlistDetail(id: playlistID)
-            detail = response.playlist
-            tracks = response.playlist.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
-            merge(privileges: response.privileges)
-            isLoading = false
-            await loadRemainingTracks()
-        } catch {
-            isLoading = false
-            if tracks.isEmpty { errorMessage = error.localizedDescription }
-        }
-    }
-
-    private func loadRemainingTracks() async {
-        guard let detail, tracks.count < detail.trackIds.count else { return }
-        isLoadingMore = true
-        defer { isLoadingMore = false }
-        let remaining = detail.trackIds.map(\.id).dropFirst(tracks.count)
-        for chunk in stride(from: 0, to: remaining.count, by: 500)
-            .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-            guard let response = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
-            tracks += response.songs.filter { !reducedRecommendationIDs.contains($0.id) }
-            merge(privileges: response.privileges)
-        }
-    }
-
-    private func merge(privileges list: [TrackPrivilege]?) {
-        for privilege in list ?? [] {
-            privileges[privilege.id] = privilege
-        }
-    }
-
-    func remove(_ track: Track) {
-        tracks.removeAll { $0.id == track.id }
-    }
-
-    func replaceRecommendation(_ rejected: Track, with replacement: Track) {
-        if tracks.replaceRecommendation(rejected, with: replacement) {
-            reducedRecommendationIDs.insert(rejected.id)
-        }
-    }
-}
-
 struct PlaylistDetailView: View {
     let playlistID: Int
     var isLikedList = false
     var recommendationContext: RecommendationContext?
 
-    @StateObject private var model: PlaylistDetailViewModel
+    @StateObject private var model: PlaylistContent
+    @ObservedObject private var downloads = DownloadManager.shared
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -87,7 +16,7 @@ struct PlaylistDetailView: View {
         self.playlistID = playlistID
         self.isLikedList = isLikedList
         self.recommendationContext = recommendationContext
-        _model = StateObject(wrappedValue: PlaylistDetailViewModel(playlistID: playlistID))
+        _model = StateObject(wrappedValue: PlaylistContent(playlistID: playlistID))
     }
 
     private var isOwnPlaylist: Bool {
@@ -131,7 +60,7 @@ struct PlaylistDetailView: View {
                             source: .playlist(playlistID),
                             context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
                             removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
-                            onRemoved: { model.remove($0) },
+                            onRemoved: { track in Task { await model.remove(track) } },
                             recommendationContext: recommendationContext,
                             onRecommendationReduced: { model.replaceRecommendation($0, with: $1) }
                         )
@@ -150,7 +79,7 @@ struct PlaylistDetailView: View {
                     loadingHeader
                 } else if let message = model.errorMessage {
                     ErrorStateView(message: message) {
-                        Task { await model.load() }
+                        Task { await loadPlaylist() }
                     }
                     .frame(minHeight: 400)
                 }
@@ -162,9 +91,14 @@ struct PlaylistDetailView: View {
         #else
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .task(id: playlistID) {
-            await model.load()
+        .task(id: "\(playlistID):\(account.offlineScope ?? ""):\(downloads.network.isKnown):\(downloads.network.connected)") {
+            await loadPlaylist()
         }
+    }
+
+    private func loadPlaylist() async {
+        await model.load(allowNetwork: !downloads.network.isKnown || downloads.network.connected,
+                         summary: account.userPlaylists.first { $0.id == playlistID })
     }
 
     // MARK: - Compact (Mobile) Header
@@ -253,6 +187,9 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                 }
                 .buttonStyle(.pressable)
+
+                DownloadCollectionButton(tracks: model.tracks, owner: "playlist:\(playlistID)",
+                                         name: detail.name, enabled: model.canDownloadAll, compact: true)
 
                 if isLikedList {
                     Button {
@@ -362,6 +299,9 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
             }
             .buttonStyle(.pressable)
+
+            DownloadCollectionButton(tracks: model.tracks, owner: "playlist:\(playlistID)",
+                                     name: detail.name, enabled: model.canDownloadAll)
 
             if isLikedList {
                 Button {

@@ -9,15 +9,6 @@ enum TrackRowStyle {
     case compact
 }
 
-enum TrackDownloadAction: Equatable {
-    /// Show the normal download/remove toggle used by remote song lists.
-    case automatic
-    /// Show only a remove action for a list that already contains downloads.
-    case removeOnly
-    /// Do not show an inline download action.
-    case hidden
-}
-
 enum RecommendationContext {
     case daily
     case radar
@@ -30,7 +21,6 @@ struct TrackRow: View {
     let index: Int
     var style: TrackRowStyle = .full
     var allowsArtistNavigation: Bool = true
-    var downloadAction: TrackDownloadAction = .automatic
     var playability: TrackPlayability = .playable
     /// Extra trailing text (e.g. play count for recents).
     var trailingText: String?
@@ -53,7 +43,7 @@ struct TrackRow: View {
     @State private var isReducingRecommendation = false
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
-    private var isPlayable: Bool { playability == .playable }
+    private var isPlayable: Bool { playability == .playable || downloads.isDownloaded(trackID: track.id) }
     private var showsArtwork: Bool { style != .albumTrack }
 
     private var hidesLeadingIndex: Bool {
@@ -269,38 +259,8 @@ struct TrackRow: View {
 
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
-            if let progress = downloads.progress(for: track) {
-                TrackDownloadProgressView(progress: progress) {
-                    downloads.cancel(track)
-                }
-            } else if !track.isLocal, downloadAction != .hidden, isCompact || isHovering {
-                Button {
-                    if downloadAction == .removeOnly || downloads.isDownloaded(track) {
-                        downloads.remove(track)
-                    } else {
-                        downloads.download(track)
-                    }
-                } label: {
-                    if downloads.isDownloading(track) {
-                        ProgressView()
-                            .controlSize(.mini)
-                    } else if downloadAction == .removeOnly {
-                        Image(systemName: "trash")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.red)
-                    } else {
-                        Image(systemName: downloads.isDownloaded(track)
-                              ? "arrow.down.circle.fill"
-                              : "arrow.down.circle")
-                            .font(.system(size: 12))
-                            .foregroundStyle(downloads.isDownloaded(track) ? Theme.accent : .secondary)
-                    }
-                }
-                .buttonStyle(.pressable)
-                .disabled(downloads.isDownloading(track))
-                .accessibilityLabel(downloadAction == .removeOnly || downloads.isDownloaded(track)
-                                    ? String(localized: "删除下载")
-                                    : String(localized: "下载歌曲"))
+            if !track.isLocal {
+                TrackDownloadButton(track: track, isVisible: isCompact || isHovering)
             }
 
             let liked = account.isLiked(track.id)
@@ -335,21 +295,7 @@ struct TrackRow: View {
         Button("收藏到歌单…") {
             showAddToPlaylist = true
         }
-        if !track.isLocal {
-            if downloads.isDownloading(track) {
-                Button("取消下载", role: .destructive) {
-                    downloads.cancel(track)
-                }
-            } else if downloads.isDownloaded(track) {
-                Button("删除下载", role: .destructive) {
-                    downloads.remove(track)
-                }
-            } else {
-                Button("下载歌曲") {
-                    downloads.download(track)
-                }
-            }
-        }
+        if !track.isLocal { TrackDownloadActions(track: track) }
         if let pid = removableFromPlaylistID {
             Button("从歌单中删除", role: .destructive) {
                 Task {
@@ -585,48 +531,12 @@ final class SpectrumBarsView: PlatformView {
     }
 }
 
-private struct TrackDownloadProgressView: View {
-    let progress: DownloadManager.DownloadProgress
-    let onCancel: () -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            VStack(alignment: .trailing, spacing: 2) {
-                if let fraction = progress.fractionCompleted {
-                    ProgressView(value: fraction)
-                        .progressViewStyle(.linear)
-                } else {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                }
-
-                Text(progress.statusText)
-                    .font(.system(size: 9).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .frame(width: 82)
-
-            Button(action: onCancel) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.pressable)
-            .accessibilityLabel(String(localized: "取消下载"))
-        }
-        .frame(width: 104)
-        .accessibilityElement(children: .contain)
-    }
-}
-
 // MARK: - Track list
 
 struct TrackListView: View {
     let tracks: [Track]
     var style: TrackRowStyle = .full
     var allowsArtistNavigation: Bool = true
-    var downloadAction: TrackDownloadAction = .automatic
     var privileges: [Int: TrackPrivilege] = [:]
     var source: PlaySource = .none
     /// The place this list belongs to, for the Dock menu's recents.
@@ -635,20 +545,21 @@ struct TrackListView: View {
     var onRemoved: ((Track) -> Void)?
     var recommendationContext: RecommendationContext?
     var onRecommendationReduced: ((Track, Track) -> Void)?
+    var selection: Binding<Set<Int>>?
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
+    @ObservedObject private var downloads = DownloadManager.shared
 
     var body: some View {
         LazyVStack(spacing: 1) {
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                 let recommendationHandler = onRecommendationReduced
-                TrackRow(
+                let row = TrackRow(
                     track: track,
                     index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
                     style: style,
                     allowsArtistNavigation: allowsArtistNavigation,
-                    downloadAction: downloadAction,
                     playability: playability(of: track),
                     removableFromPlaylistID: removableFromPlaylistID,
                     onRemoved: { onRemoved?(track) },
@@ -659,12 +570,36 @@ struct TrackListView: View {
                     player.play(tracks: playableTracks, source: source, startAt: track,
                                 context: context)
                 }
+                if let selection {
+                    let selected = selection.wrappedValue.contains(track.id)
+                    Button {
+                        if selected { selection.wrappedValue.remove(track.id) }
+                        else { selection.wrappedValue.insert(track.id) }
+                    } label: {
+                        HStack(spacing: 0) {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(selected ? Theme.accent : Color.secondary)
+                                .frame(width: 32)
+                            row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
+                        .background(Theme.accent.opacity(selected ? 0.07 : 0),
+                                    in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
+                    .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
+                    .accessibilityIdentifier("select-download-\(track.id)")
+                } else {
+                    row
+                }
             }
         }
     }
 
     private var playableTracks: [Track] {
-        tracks.filter { playability(of: $0) == .playable }
+        tracks.filter { playability(of: $0) == .playable || downloads.isDownloaded(trackID: $0.id) }
     }
 
     private func playability(of track: Track) -> TrackPlayability {
