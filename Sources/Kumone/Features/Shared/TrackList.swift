@@ -545,6 +545,7 @@ struct TrackListView: View {
     var onRemoved: ((Track) -> Void)?
     var recommendationContext: RecommendationContext?
     var onRecommendationReduced: ((Track, Track) -> Void)?
+    var selection: Binding<Set<Int>>?
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -554,7 +555,7 @@ struct TrackListView: View {
         LazyVStack(spacing: 1) {
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                 let recommendationHandler = onRecommendationReduced
-                TrackRow(
+                let row = TrackRow(
                     track: track,
                     index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
                     style: style,
@@ -568,6 +569,30 @@ struct TrackListView: View {
                 ) {
                     player.play(tracks: playableTracks, source: source, startAt: track,
                                 context: context)
+                }
+                if let selection {
+                    let selected = selection.wrappedValue.contains(track.id)
+                    Button {
+                        if selected { selection.wrappedValue.remove(track.id) }
+                        else { selection.wrappedValue.insert(track.id) }
+                    } label: {
+                        HStack(spacing: 0) {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(selected ? Theme.accent : Color.secondary)
+                                .frame(width: 32)
+                            row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
+                        .background(Theme.accent.opacity(selected ? 0.07 : 0),
+                                    in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
+                    .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
+                    .accessibilityIdentifier("select-download-\(track.id)")
+                } else {
+                    row
                 }
             }
         }

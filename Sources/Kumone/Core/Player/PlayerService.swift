@@ -1015,20 +1015,19 @@ final class PlayerService: ObservableObject {
     /// prefetch so both always derive identical keys. Pure: no toasts, no
     /// state changes.
     private func resolveSource(for track: Track) async -> ResolvedSource? {
-        let localURL = track.isLocal ? track.localAssetURL : DownloadManager.shared.fileURL(for: track)
-        if let localURL {
+        if track.isLocal {
+            guard let localURL = track.localAssetURL else { return nil }
             return ResolvedSource(
                 url: localURL,
                 key: EngineAudioCache.Key(
                     trackID: track.id, level: "local",
-                    source: track.isLocal ? "library" : "download",
+                    source: "library",
                     fileExtension: localURL.pathExtension.isEmpty ? "mp3" : localURL.pathExtension
                 ),
                 level: nil, unblockSource: nil, isTrial: false,
                 durationMS: track.durationMS > 0 ? track.durationMS : nil
             )
         }
-        guard !track.isLocal else { return nil }
         let quality = SettingsManager.shared.audioQuality.rawValue
         var data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality).first
         if data?.url == nil, quality != AudioQuality.standard.rawValue {
