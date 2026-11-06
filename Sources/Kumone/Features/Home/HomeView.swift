@@ -40,9 +40,9 @@ final class HomeViewModel: ObservableObject {
         state = .loading
 
         async let playlistsTask = fetchRecommendPlaylists(loggedIn: loggedIn)
-        async let toplistsTask = try? NeteaseAPI.toplists()
-        async let albumsTask = try? NeteaseAPI.newAlbums(limit: 20)
-        async let artistsTask = try? NeteaseAPI.topArtists()
+        async let toplistsTask = try? MusicAPI.toplists()
+        async let albumsTask = try? MusicAPI.newAlbums(limit: 20)
+        async let artistsTask = try? MusicAPI.topArtists()
 
         let playlists = await playlistsTask
         recommendPlaylists = playlists
@@ -54,7 +54,7 @@ final class HomeViewModel: ObservableObject {
         topArtists = Array(artists.shuffled().prefix(6))
 
         if loggedIn {
-            if let daily = try? await NeteaseAPI.dailyRecommendSongs() {
+            if let daily = try? await MusicAPI.dailyRecommendSongs() {
                 dailyFirstCover = daily.first?.album.picUrl
             }
             await loadRadarPlaylists()
@@ -74,13 +74,13 @@ final class HomeViewModel: ObservableObject {
     }
 
     private func loadRadarPlaylists() async {
-        let briefs = await withTaskGroup(of: (Int, NeteaseAPI.PlaylistBrief.Body?).self) { group in
+        let briefs = await withTaskGroup(of: (Int, MusicAPI.PlaylistBrief.Body?).self) { group in
             for id in Self.radarPlaylistIDs {
                 group.addTask {
-                    (id, try? await NeteaseAPI.playlistBrief(id: id))
+                    (id, try? await MusicAPI.playlistBrief(id: id))
                 }
             }
-            var byID: [Int: NeteaseAPI.PlaylistBrief.Body] = [:]
+            var byID: [Int: MusicAPI.PlaylistBrief.Body] = [:]
             for await (id, brief) in group {
                 if let brief { byID[id] = brief }
             }
@@ -98,14 +98,14 @@ final class HomeViewModel: ObservableObject {
 
     private func fetchRecommendPlaylists(loggedIn: Bool) async -> [PlaylistSummary] {
         if loggedIn {
-            async let recommend = try? NeteaseAPI.recommendResource()
-            async let personalized = try? NeteaseAPI.personalizedPlaylists(limit: 30)
+            async let recommend = try? MusicAPI.recommendResource()
+            async let personalized = try? MusicAPI.personalizedPlaylists(limit: 30)
             let head = await recommend ?? []
             let tail = await personalized ?? []
             var seen = Set<Int>()
             return (head + tail).filter { seen.insert($0.id).inserted }
         }
-        return (try? await NeteaseAPI.personalizedPlaylists(limit: 30)) ?? []
+        return (try? await MusicAPI.personalizedPlaylists(limit: 30)) ?? []
     }
 }
 
@@ -145,7 +145,7 @@ struct HomeView: View {
     }
 
     private var loadingBody: some View {
-        VStack(alignment: .leading, spacing: 32) {
+        VStack(alignment: .leading, spacing: Theme.Layout.sectionSpacing) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     ForEach(0..<3, id: \.self) { _ in
@@ -162,7 +162,7 @@ struct HomeView: View {
     }
 
     private var loadedBody: some View {
-        LazyVStack(alignment: .leading, spacing: 34) {
+        LazyVStack(alignment: .leading, spacing: Theme.Layout.sectionSpacing) {
             // Anonymous users go straight to recommended playlists;
             // the login entry lives in the sidebar / 我的 tab only.
             if account.isLoggedIn {
@@ -186,7 +186,8 @@ struct HomeView: View {
                             CoverCardBody(
                                 coverURL: radar.coverURL?.resizedImageURL(384),
                                 title: radar.title,
-                                subtitle: radar.subtitle
+                                subtitle: radar.subtitle,
+                                titleLineLimit: Theme.Layout.shelfTitleLineLimit
                             ) {
                                 playPlaylist(radar.id)
                             }
@@ -208,7 +209,7 @@ struct HomeView: View {
             }
 
             if !model.newAlbums.isEmpty {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: Theme.Layout.sectionHeaderSpacing) {
                     SectionHeader(title: "新碟上架")
                         .padding(.horizontal, Theme.Layout.contentInset)
                     GeometryReader { geometry in
@@ -222,6 +223,7 @@ struct HomeView: View {
                             .padding(.horizontal, Theme.Layout.contentInset)
                             .frame(height: Theme.Layout.coverShelfHeight)
                         }
+                        .shelfEdgeClip()
                     }
                     .frame(height: Theme.Layout.coverShelfHeight)
                 }
@@ -237,7 +239,8 @@ struct HomeView: View {
 
             PlayerClearanceSpacer()
         }
-        .padding(.vertical, Theme.Layout.contentInset - 8)
+        .padding(.top, Theme.Layout.pageTopPadding)
+        .padding(.bottom, Theme.Layout.contentInset - 8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -290,6 +293,7 @@ struct HomeView: View {
             .padding(.vertical, 6)
         }
         .compatScrollClipDisabled()
+        .shelfEdgeClip()
     }
 
     private func startHeartbeatMode() {
@@ -300,7 +304,7 @@ struct HomeView: View {
                 return
             }
             do {
-                let tracks = try await NeteaseAPI.intelligenceList(songID: seed, playlistID: likedList.id)
+                let tracks = try await MusicAPI.intelligenceList(songID: seed, playlistID: likedList.id)
                 guard !tracks.isEmpty else {
                     ToastCenter.shared.show(String(localized: "心动模式暂时不可用"))
                     return
@@ -322,7 +326,8 @@ struct HomeView: View {
                 coverURL: playlist.coverURL?.resizedImageURL(384),
                 title: playlist.name,
                 subtitle: playlist.copywriter,
-                playCount: playlist.playCount
+                playCount: playlist.playCount,
+                titleLineLimit: Theme.Layout.shelfTitleLineLimit
             ) {
                 playPlaylist(playlist.id)
             }
@@ -336,10 +341,11 @@ struct HomeView: View {
                 coverURL: album.picUrl?.resizedImageURL(384),
                 title: album.name,
                 subtitle: album.artistName,
-                size: size
+                size: size,
+                titleLineLimit: Theme.Layout.shelfTitleLineLimit
             ) {
                 Task {
-                    if let detail = try? await NeteaseAPI.album(id: album.id) {
+                    if let detail = try? await MusicAPI.album(id: album.id) {
                         player.play(tracks: detail.songs, source: .album(album.id),
                                     context: .album(id: album.id, name: album.name))
                     }
@@ -391,11 +397,11 @@ struct HomeView: View {
 
     private func playPlaylist(_ id: Int) {
         Task {
-            guard let detail = try? await NeteaseAPI.playlistDetail(id: id) else { return }
+            guard let detail = try? await MusicAPI.playlistDetail(id: id) else { return }
             var tracks = detail.playlist.tracks
             if tracks.isEmpty {
                 let ids = detail.playlist.trackIds.map(\.id)
-                tracks = (try? await NeteaseAPI.songDetails(ids: Array(ids.prefix(500))))?.songs ?? []
+                tracks = (try? await MusicAPI.songDetails(ids: Array(ids.prefix(500))))?.songs ?? []
             }
             player.play(tracks: tracks, source: .playlist(id),
                         context: .playlist(id: id, name: detail.playlist.name))
@@ -468,6 +474,7 @@ struct CoverCardBody: View {
     var subtitle: String?
     var playCount: Int = 0
     var size: CGFloat = Theme.Layout.cardSize
+    var titleLineLimit = 2
     var onPlay: (() -> Void)?
 
     @State private var isHovering = false
@@ -496,7 +503,7 @@ struct CoverCardBody: View {
 
             Text(title)
                 .font(.system(size: 13, weight: .medium))
-                .lineLimit(2)
+                .lineLimit(titleLineLimit)
                 .multilineTextAlignment(.leading)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: flexibleWidth ? .infinity : size, alignment: .leading)

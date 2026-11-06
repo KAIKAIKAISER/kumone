@@ -9,71 +9,93 @@ struct AlbumDetailView: View {
     @State private var isSubscribed = false
     @State private var isLoading = true
     @State private var errorMessage: String?
+    @State private var showFullDescription = false
+    @State private var loadGeneration = 0
+    @ObservedObject private var downloads = DownloadManager.shared
 
-    @EnvironmentObject private var player: PlayerService
+    private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var isCompact: Bool {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+        return LayoutSizeClass.isCompact(horizontal: horizontalSizeClass, vertical: verticalSizeClass,
+                                         fallback: UIDevice.current.userInterfaceIdiom == .phone)
         #else
         return false
         #endif
     }
 
+    /// Only a collection with songs to show may replace the online page,
+    /// otherwise an empty list would hide the error and its retry button.
+    private var savedCollectionID: String? {
+        let id = "album:\(albumID)"
+        return downloads.downloadedSongs(in: id).isEmpty ? nil : id
+    }
+
     var body: some View {
-        ScrollView {
+        Group {
+            if let savedCollectionID, !downloads.network.connected || errorMessage != nil {
+                DownloadedMusicView(collectionID: savedCollectionID)
+            } else { onlineContent }
+        }
+        .task(id: "\(albumID):\(downloads.network.connected)") {
+            if downloads.network.connected || savedCollectionID == nil { await load() }
+        }
+        .toolbar {
+            if errorMessage != nil, downloads.network.connected, album != nil || savedCollectionID != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("重试")
+                        .help("重试")
+                }
+            }
+        }
+    }
+
+    private var onlineContent: some View {
+        TrackListScrollView(trackIDs: tracks.map(\.id), spacing: isCompact ? 16 : 20) {
+            if let album {
+                if isCompact {
+                    compactHeader(album).padding(.horizontal, 16).padding(.top, 12)
+                } else {
+                    regularHeader(album).padding(.horizontal, Theme.Layout.contentInset).padding(.top, 16)
+                }
+            } else if isLoading {
+                loadingHeader
+            } else if let errorMessage {
+                ErrorStateView(message: errorMessage) { Task { await load() } }
+                    .frame(minHeight: 400)
+            }
+        } rows: { layout in
+            TrackListView(tracks: tracks, source: .album(albumID),
+                          context: album.map { .album(id: albumID, name: $0.name) }, layout: layout)
+                .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+        } footer: {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
-                if let album {
-                    if isCompact {
-                        compactHeader(album)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                    } else {
-                        regularHeader(album)
-                            .padding(.horizontal, Theme.Layout.contentInset)
-                            .padding(.top, 16)
-                    }
+                if !otherAlbums.isEmpty {
+                    SectionHeader(title: "该歌手的其他专辑")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+                        .padding(.top, 12)
 
-                    TrackListView(
-                        tracks: tracks,
-                        source: .album(albumID),
-                        context: .album(id: albumID, name: album.name)
-                    )
-                    .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
-
-                    if !otherAlbums.isEmpty {
-                        SectionHeader(title: "该歌手的其他专辑")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-                            .padding(.top, 12)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(otherAlbums) { item in
-                                    NavigationLink(value: Destination.album(item.id)) {
-                                        CoverCardBody(
-                                            coverURL: item.picUrl?.resizedImageURL(384),
-                                            title: item.name,
-                                            subtitle: Formatters.date(fromMS: item.publishTime)
-                                        )
-                                    }
-                                    .buttonStyle(.interactiveCard)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(otherAlbums) { item in
+                                NavigationLink(value: Destination.album(item.id)) {
+                                    CoverCardBody(
+                                        coverURL: item.picUrl?.resizedImageURL(384),
+                                        title: item.name,
+                                        subtitle: Formatters.date(fromMS: item.publishTime)
+                                    )
                                 }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                                .buttonStyle(.interactiveCard)
                             }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
                         }
                     }
-                } else if isLoading {
-                    loadingHeader
-                } else if let errorMessage {
-                    ErrorStateView(message: errorMessage) {
-                        Task { await load() }
-                    }
-                    .frame(minHeight: 400)
                 }
-
                 PlayerClearanceSpacer()
             }
         }
@@ -82,28 +104,31 @@ struct AlbumDetailView: View {
         #else
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .task(id: albumID) {
-            await load()
-        }
     }
 
     private func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
         isLoading = true
         errorMessage = nil
+        defer { if generation == loadGeneration { isLoading = false } }
         do {
-            let response = try await NeteaseAPI.album(id: albumID)
+            let response = try await MusicAPI.album(id: albumID)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             album = response.album
             tracks = response.songs
             isLoading = false
-            if let dynamic = try? await NeteaseAPI.albumDynamic(id: albumID) {
+            if let dynamic = try? await MusicAPI.albumDynamic(id: albumID) {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
                 isSubscribed = dynamic.isSub ?? false
             }
             if let artistID = response.album.artist?.id,
-               let albums = try? await NeteaseAPI.artistAlbums(id: artistID, limit: 12) {
+               let albums = try? await MusicAPI.artistAlbums(id: artistID, limit: 12) {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
                 otherAlbums = albums.hotAlbums.filter { $0.id != albumID }
             }
         } catch {
-            isLoading = false
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -139,6 +164,41 @@ struct AlbumDetailView: View {
                 }
             }
 
+            if let description = album.description, !description.isEmpty {
+                Button {
+                    showFullDescription = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(description.replacingOccurrences(of: "\n", with: " "))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showFullDescription) {
+                    NavigationStack {
+                        ScrollView {
+                            Text(description)
+                                .font(.system(size: 14))
+                                .padding(20)
+                        }
+                        .navigationTitle("专辑简介")
+                        #if os(iOS)
+                        .navigationBarTitleDisplayMode(.inline)
+                        #endif
+                        .toolbar {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button("完成") { showFullDescription = false }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Compact Action Bar
             HStack(spacing: 10) {
                 Button {
@@ -158,8 +218,7 @@ struct AlbumDetailView: View {
                 }
                 .buttonStyle(.pressable)
 
-                DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)",
-                                         name: album.name, compact: true)
+                DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name, compact: true)
 
                 if account.isLoggedIn {
                     Button {
@@ -208,6 +267,28 @@ struct AlbumDetailView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.tertiary)
 
+                if let description = album.description, !description.isEmpty {
+                    Button {
+                        showFullDescription = true
+                    } label: {
+                        Text(description.replacingOccurrences(of: "\n", with: " "))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showFullDescription, arrowEdge: .bottom) {
+                        ScrollView {
+                            Text(description)
+                                .font(.system(size: 13))
+                                .padding(16)
+                                .frame(width: 380, alignment: .leading)
+                        }
+                        .frame(maxHeight: 400)
+                    }
+                }
+
                 Spacer(minLength: 4)
 
                 HStack(spacing: 10) {
@@ -225,8 +306,7 @@ struct AlbumDetailView: View {
                     }
                     .buttonStyle(.pressable)
 
-                    DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)",
-                                             name: album.name)
+                    DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name)
 
                     if account.isLoggedIn {
                         Button {
@@ -256,7 +336,7 @@ struct AlbumDetailView: View {
     private func toggleSubscribe() {
         Task {
             do {
-                try await NeteaseAPI.subscribeAlbum(id: albumID, subscribe: !isSubscribed)
+                try await MusicAPI.subscribeAlbum(id: albumID, subscribe: !isSubscribed)
                 isSubscribed.toggle()
                 ToastCenter.shared.show(isSubscribed ? String(localized: "已收藏专辑") : String(localized: "已取消收藏"))
             } catch {

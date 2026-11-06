@@ -8,7 +8,7 @@ struct QRCodeLoginTests {
     func parsesSuccessfulLoginCookies() throws {
         let raw = "MUSIC_U=music-token; Path=/; HttpOnly;; __csrf=csrf-token; Path=/"
 
-        let cookies = NeteaseClient.parseCookieString(raw)
+        let cookies = MusicClient.parseCookieString(raw)
 
         #expect(cookies["MUSIC_U"] == "music-token")
         #expect(cookies["__csrf"] == "csrf-token")
@@ -19,7 +19,7 @@ struct QRCodeLoginTests {
     func decodesSuccessfulLoginResponse() throws {
         let data = Data(#"{"code":803,"message":"授权登录成功","cookie":"MUSIC_U=token;; __csrf=csrf"}"#.utf8)
 
-        let response = try JSONDecoder().decode(NeteaseAPI.QRCheckResponse.self, from: data)
+        let response = try JSONDecoder().decode(MusicAPI.QRCheckResponse.self, from: data)
 
         #expect(response.code == 803)
         #expect(response.cookie == "MUSIC_U=token;; __csrf=csrf")
@@ -29,7 +29,7 @@ struct QRCodeLoginTests {
     func decodesWaitingResponse() throws {
         let data = Data(#"{"code":801,"message":"等待扫码"}"#.utf8)
 
-        let response = try JSONDecoder().decode(NeteaseAPI.QRCheckResponse.self, from: data)
+        let response = try JSONDecoder().decode(MusicAPI.QRCheckResponse.self, from: data)
 
         #expect(response.code == 801)
         #expect(response.cookie == nil)

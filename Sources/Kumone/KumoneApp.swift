@@ -4,6 +4,7 @@ import SwiftUI
 #if os(macOS)
 public struct KumoneApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @AppStorage(SettingsManager.Keys.menuBarPlayer) private var showMenuBarPlayer = false
 
     @StateObject private var player = PlayerService.shared
     @StateObject private var account = AccountStore.shared
@@ -16,7 +17,7 @@ public struct KumoneApp: App {
 
     public var body: some Scene {
         Window("Kumone", id: "main") {
-            MainWindow()
+            UpstreamGate { MainWindow() }
                 .environmentObject(player)
                 .environmentObject(account)
                 .environmentObject(settings)
@@ -106,12 +107,29 @@ public struct KumoneApp: App {
         .windowResizability(.contentMinSize)
         #endif
 
+        MenuBarExtra(isInserted: Binding(
+            get: { showMenuBarPlayer },
+            set: { inserted in
+                // AppStorage invalidates the scene even for an unchanged write.
+                if showMenuBarPlayer != inserted {
+                    showMenuBarPlayer = inserted
+                }
+            })) {
+            MenuBarPlayer()
+                .environmentObject(player)
+                .environmentObject(account)
+                .tint(Theme.accent)
+        } label: {
+            MenuBarPlayerLabel()
+        }
+        .menuBarExtraStyle(.window)
+
         Settings {
             SettingsView()
                 .environment(\.openDestination, { destination in
                     guard destination == .downloaded else { return }
                     NotificationCenter.default.post(name: .showDownloadedMusic, object: nil)
-                    _ = AppDelegate.shared?.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true)
+                    AppDelegate.shared?.reopenMainWindow()
                 })
                 .environmentObject(account)
                 .environmentObject(settings)
@@ -133,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// interceptor hides (orders out) the window instead of destroying the
     /// single-instance `Window` scene, so we can always bring it back here.
     weak var mainWindow: NSWindow?
+    private let hiddenWindows = HiddenAppWindows()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
@@ -148,17 +167,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // App-internal shortcut monitoring (local monitor).
         // Global hotkeys are handled by GlobalHotKeyManager via Carbon Event Hot Key API.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Esc always closes the immersive now-playing page — a built-in
-            // default that isn't a rebindable shortcut (the recorder uses Esc to
-            // clear a binding, so it could never be assigned otherwise). (#125)
-            if event.keyCode == 53,
-               event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
-               PlayerService.shared.showNowPlaying {
-                PlayerService.shared.showNowPlaying = false
-                return nil
-            }
-            return ShortcutManager.shared.handleKeyEvent(event) ? nil : event
+            Self.interceptKeyEvent(event)
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        PlayerService.shared.checkpointPlayback()
+        PlaybackStateStorage.flush()
+    }
+
+    func applicationWillHide(_ notification: Notification) {
+        hiddenWindows.capture(NSApp.orderedWindows)
+    }
+
+    func applicationWillUnhide(_ notification: Notification) {
+        hiddenWindows.suppressUnhide(for: NSApp.keyWindow)
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        hiddenWindows.restore(keyWindow: NSApp.keyWindow)
+    }
+
+    /// Deliver recording input before playback shortcuts or menu key equivalents consume it.
+    @MainActor
+    static func interceptKeyEvent(_ event: NSEvent) -> NSEvent? {
+        if let recorder = event.window?.firstResponder as? ShortcutRecorderView.RecorderNSView {
+            recorder.keyDown(with: event)
+            return nil
+        }
+        // Outside recording, unmodified Esc closes the immersive playback page.
+        if event.window === shared?.mainWindow,
+           event.keyCode == 53,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+           PlayerService.shared.showNowPlaying {
+            PlayerService.shared.showNowPlaying = false
+            return nil
+        }
+        return ShortcutManager.shared.handleKeyEvent(event) ? nil : event
     }
 
     private func applyAppearance(_ scheme: ColorScheme?) {
@@ -178,7 +223,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        reopenMainWindow()
+        // Fully handled above; returning `false` prevents AppKit from also
+        // enqueuing another SwiftUI scene request (which re-created #58's
+        // duplicate window).
+        return false
+    }
+
+    func reopenMainWindow() {
         // `hasVisibleWindows` is unreliable here: helper windows such as the
         // desktop-lyrics overlay make it `true` even when the main window is
         // gone, so decide based on the main window itself.
@@ -188,20 +241,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // still around — just hidden and/or miniaturised, and possibly behind
         // other windows. Restore and front it. Only if it truly no longer
         // exists do we ask SwiftUI to recreate the scene.
-        let target = mainWindow ?? sender.windows.first {
+        let target = mainWindow ?? NSApp.windows.first {
             $0.styleMask.contains(.titled) && $0.canBecomeMain
         }
         if let window = target {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            // The window is on screen again: let the page's animations resume
+            // even if the occlusion observer lags the fronting, and bring the
+            // page itself back.
+            let onScreen = window.isVisible && !window.isMiniaturized
+            MainWindowVisibility.shared.update(isVisible: onScreen, isOnScreen: onScreen)
         } else {
             openMainWindow?()
         }
-        // Fully handled above; returning `false` prevents AppKit from also
-        // enqueuing another SwiftUI scene request (which re-created #58's
-        // duplicate window).
-        return false
     }
 }
 #endif

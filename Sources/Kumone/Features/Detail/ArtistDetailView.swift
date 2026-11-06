@@ -13,132 +13,124 @@ struct ArtistDetailView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
 
-    @EnvironmentObject private var player: PlayerService
+    private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var isCompact: Bool {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+        return LayoutSizeClass.isCompact(horizontal: horizontalSizeClass, vertical: verticalSizeClass,
+                                         fallback: UIDevice.current.userInterfaceIdiom == .phone)
         #else
         return false
         #endif
     }
 
     var body: some View {
-        ScrollView {
+        TrackListScrollView(trackIDs: songs.map(\.id), style: .compact, spacing: isCompact ? 16 : 26) {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 26) {
                 if let artist {
                     if isCompact {
-                        compactHeader(artist)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
+                        compactHeader(artist).padding(.horizontal, 16).padding(.top, 12)
                     } else {
-                        regularHeader(artist)
-                            .padding(.horizontal, Theme.Layout.contentInset)
-                            .padding(.top, 16)
+                        regularHeader(artist).padding(.horizontal, Theme.Layout.contentInset).padding(.top, 16)
                     }
-
                     if !songs.isEmpty {
-                        SectionHeader(title: "热门歌曲")
+                        SectionHeader(title: "热门单曲")
                             .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        TrackListView(
-                            tracks: songs,
-                            style: .compact,
-                            source: .artist(artistID),
-                            context: .artist(id: artistID, name: artist.name)
-                        )
-                        .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
-                    }
-
-                    if !createdPlaylists.isEmpty {
-                        SectionHeader(title: "创建的歌单")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(createdPlaylists) { playlist in
-                                    NavigationLink(value: Destination.playlist(playlist.id)) {
-                                        CoverCardBody(
-                                            coverURL: playlist.coverURL?.resizedImageURL(384),
-                                            title: playlist.name,
-                                            subtitle: "\(playlist.trackCount) 首",
-                                            playCount: playlist.playCount
-                                        )
-                                    }
-                                    .buttonStyle(.interactiveCard)
-                                }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                            }
-                        }
-                    }
-
-                    if !albums.isEmpty {
-                        SectionHeader(title: "专辑")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(albums) { album in
-                                    albumCard(album)
-                                }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                            }
-                        }
-                    }
-
-                    if !epsAndSingles.isEmpty {
-                        SectionHeader(title: "EP 与单曲")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(epsAndSingles) { album in
-                                    albumCard(album)
-                                }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                            }
-                        }
-                    }
-
-                    if !similar.isEmpty {
-                        SectionHeader(title: "相似歌手")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(similar) { sim in
-                                    NavigationLink(value: Destination.artist(sim.id)) {
-                                        VStack(spacing: 8) {
-                                            CachedAsyncImage(url: sim.picUrl?.resizedImageURL(256))
-                                                .frame(width: isCompact ? 80 : 100, height: isCompact ? 80 : 100)
-                                                .clipShape(Circle())
-                                            Text(sim.name)
-                                                .font(.system(size: 12, weight: .medium))
-                                                .lineLimit(1)
-                                        }
-                                        .frame(width: isCompact ? 80 : 100)
-                                    }
-                                    .buttonStyle(.interactiveCard)
-                                }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                            }
-                        }
                     }
                 } else if isLoading {
                     loadingHeader
                 } else if let errorMessage {
-                    ErrorStateView(message: errorMessage) {
-                        Task { await load() }
+                    ErrorStateView(message: errorMessage) { Task { await load() } }
+                        .frame(minHeight: 400)
+                }
+            }
+        } rows: { layout in
+            TrackListView(tracks: songs, style: .compact, source: .artist(artistID),
+                          context: artist.map { .artist(id: artistID, name: $0.name) }, layout: layout)
+                .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+        } footer: {
+            VStack(alignment: .leading, spacing: isCompact ? 16 : 26) {
+                if !createdPlaylists.isEmpty {
+                    SectionHeader(title: "创建的歌单")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(createdPlaylists) { playlist in
+                                NavigationLink(value: Destination.playlist(playlist.id)) {
+                                    CoverCardBody(
+                                        coverURL: playlist.coverURL?.resizedImageURL(384),
+                                        title: playlist.name,
+                                        subtitle: "\(playlist.trackCount) 首",
+                                        playCount: playlist.playCount
+                                    )
+                                }
+                                .buttonStyle(.interactiveCard)
+                            }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                        }
                     }
-                    .frame(minHeight: 400)
                 }
 
+                if !albums.isEmpty {
+                    SectionHeader(title: "专辑")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(albums) { album in
+                                albumCard(album)
+                            }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                        }
+                    }
+                }
+
+                if !epsAndSingles.isEmpty {
+                    SectionHeader(title: "EP 与单曲")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(epsAndSingles) { album in
+                                albumCard(album)
+                            }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                        }
+                    }
+                }
+
+                if !similar.isEmpty {
+                    SectionHeader(title: "相似歌手")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(similar) { sim in
+                                NavigationLink(value: Destination.artist(sim.id)) {
+                                    VStack(spacing: 8) {
+                                        CachedAsyncImage(url: sim.picUrl?.resizedImageURL(256))
+                                            .frame(width: isCompact ? 80 : 100, height: isCompact ? 80 : 100)
+                                            .clipShape(Circle())
+                                        Text(sim.name)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .lineLimit(1)
+                                    }
+                                    .frame(width: isCompact ? 80 : 100)
+                                }
+                                .buttonStyle(.interactiveCard)
+                            }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                        }
+                    }
+                }
                 PlayerClearanceSpacer()
             }
         }
@@ -156,15 +148,15 @@ struct ArtistDetailView: View {
         isLoading = true
         errorMessage = nil
         do {
-            let response = try await NeteaseAPI.artist(id: artistID)
+            let response = try await MusicAPI.artist(id: artistID)
             artist = response.artist
             songs = response.hotSongs
             isFollowed = response.artist.followed
             isLoading = false
 
-            async let songsResult = try? NeteaseAPI.artistSongs(id: artistID, limit: 100)
-            async let albumsResult = try? NeteaseAPI.artistAlbums(id: artistID, limit: 60)
-            async let playlistsResult = try? NeteaseAPI.artistCreatedPlaylists(name: response.artist.name)
+            async let songsResult = try? MusicAPI.artistSongs(id: artistID, limit: 100)
+            async let albumsResult = try? MusicAPI.artistAlbums(id: artistID, limit: 60)
+            async let playlistsResult = try? MusicAPI.artistCreatedPlaylists(name: response.artist.name)
 
             if let loadedSongs = await songsResult?.songs, !loadedSongs.isEmpty {
                 songs = loadedSongs
@@ -175,7 +167,7 @@ struct ArtistDetailView: View {
             }
             createdPlaylists = await playlistsResult ?? []
             if account.isLoggedIn {
-                similar = (try? await NeteaseAPI.similarArtists(id: artistID)) ?? []
+                similar = (try? await MusicAPI.similarArtists(id: artistID)) ?? []
             }
         } catch {
             isLoading = false
@@ -319,7 +311,7 @@ struct ArtistDetailView: View {
     private func toggleFollow() {
         Task {
             do {
-                try await NeteaseAPI.subscribeArtist(id: artistID, subscribe: !isFollowed)
+                try await MusicAPI.subscribeArtist(id: artistID, subscribe: !isFollowed)
                 isFollowed.toggle()
                 ToastCenter.shared.show(isFollowed ? String(localized: "已关注歌手") : String(localized: "已取消关注"))
             } catch {

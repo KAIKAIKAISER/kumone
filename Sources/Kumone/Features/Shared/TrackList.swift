@@ -7,6 +7,8 @@ enum TrackRowStyle {
     case albumTrack
     /// Compact with artwork, no album column (artist hot songs, panels).
     case compact
+
+    var desktopRowHeight: CGFloat { self == .albumTrack ? 46 : 52 }
 }
 
 enum RecommendationContext {
@@ -34,16 +36,43 @@ struct TrackRow: View {
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openDestination) private var openDestination
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @ObservedObject private var downloads = DownloadManager.shared
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
-    @State private var isHovering = false
-    @State private var showAddToPlaylist = false
-    @State private var isReducingRecommendation = false
+    // Native cells retain this view graph when rebound to another song. Scope
+    // transient state and asynchronous completions to the song they belong to.
+    @State private var hoveredTrackID: Int?
+    @State private var addToPlaylistTrack: Track?
+    @State private var reducingRecommendationIDs: Set<Int> = []
+    /// Only this track's download state, so another row's transfer cannot
+    /// re-evaluate this body four times a second.
+    @ObservedObject private var downloadState: TrackDownloadState
+    @ObservedObject private var settings = SettingsManager.shared
+
+    init(track: Track, index: Int, style: TrackRowStyle = .full,
+         allowsArtistNavigation: Bool = true, playability: TrackPlayability = .playable,
+         trailingText: String? = nil, removableFromPlaylistID: Int? = nil, onRemoved: (() -> Void)? = nil,
+         onRecommendationReduced: ((Track) -> Void)? = nil, onPlay: @escaping () -> Void) {
+        self.track = track
+        self.index = index
+        self.style = style
+        self.allowsArtistNavigation = allowsArtistNavigation
+        self.playability = playability
+        self.trailingText = trailingText
+        self.removableFromPlaylistID = removableFromPlaylistID
+        self.onRemoved = onRemoved
+        self.onRecommendationReduced = onRecommendationReduced
+        self.onPlay = onPlay
+        _downloadState = ObservedObject(wrappedValue: DownloadManager.shared.trackState(for: track.id))
+    }
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
-    private var isPlayable: Bool { playability == .playable || downloads.isDownloaded(trackID: track.id) }
+    private var isHovering: Bool { hoveredTrackID == track.id }
+    private var isReducingRecommendation: Bool { reducingRecommendationIDs.contains(track.id) }
+    private var isOffline: Bool { downloadState.isOffline }
+    private var isPlayable: Bool { playability == .playable || isOffline }
+    private var needsNetwork: Bool { !track.isLocal && downloadState.needsNetwork }
     private var showsArtwork: Bool { style != .albumTrack }
 
     private var hidesLeadingIndex: Bool {
@@ -56,7 +85,8 @@ struct TrackRow: View {
 
     private var isCompact: Bool {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+        return LayoutSizeClass.isCompact(horizontal: horizontalSizeClass, vertical: verticalSizeClass,
+                                         fallback: UIDevice.current.userInterfaceIdiom == .phone)
         #else
         return false
         #endif
@@ -119,7 +149,7 @@ struct TrackRow: View {
                     .frame(maxWidth: 220, alignment: .leading)
             }
 
-            if let reason = playability.reason {
+            if let reason = playability.reason, !isOffline {
                 Text(reason)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.tertiary)
@@ -138,31 +168,37 @@ struct TrackRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, isCompact ? 6 : 5)
-        // Fixed row height keeps lazy-stack height estimation exact,
-        // preventing scroll-offset jumps in long lists (#3).
+        // Keep the row and its virtual scroll extent in agreement (#3).
         .frame(height: rowHeight)
-        .opacity(isPlayable ? 1 : 0.45)
+        .opacity(isPlayable && !needsNetwork ? 1 : 0.45)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
                 .fill(isHovering ? Color.primary.opacity(0.06) : .clear)
         )
         .onHover { hovering in
-            withAnimation(AppAnimation.quick) { isHovering = hovering }
+            // Scrolling moves many rows beneath the pointer. Avoid starting a
+            // new implicit animation for every row crossed during a scroll.
+            hoveredTrackID = hovering ? track.id : nil
         }
         #if os(macOS)
         .onTapGesture(count: 2) {
-            if isPlayable { onPlay() }
+            if needsNetwork { ToastCenter.shared.show(String(localized: "此歌曲需要联网播放")) }
+            else if isPlayable { onPlay() }
         }
         #endif
         .contextMenu { contextMenuItems }
-        .sheet(isPresented: $showAddToPlaylist) {
-            AddToPlaylistSheet(track: track)
+        .sheet(item: $addToPlaylistTrack) { selectedTrack in
+            AddToPlaylistSheet(track: selectedTrack)
+        }
+        .onChange(of: track.id) { _ in
+            hoveredTrackID = nil
+            addToPlaylistTrack = nil
         }
     }
 
     @ViewBuilder
     private var artwork: some View {
-        if track.album.id > 0, !track.album.name.isEmpty {
+        if !settings.disableCoverNavigation, track.album.id > 0, !track.album.name.isEmpty {
             Button {
                 openDestination(.album(track.album.id))
             } label: {
@@ -231,9 +267,9 @@ struct TrackRow: View {
 
     private var rowHeight: CGFloat {
         if style == .albumTrack {
-            return isCompact ? compactAlbumRowHeight : 46
+            return isCompact ? compactAlbumRowHeight : style.desktopRowHeight
         }
-        return isCompact ? compactRowHeight : 52
+        return isCompact ? compactRowHeight : style.desktopRowHeight
     }
 
     @ViewBuilder
@@ -260,9 +296,16 @@ struct TrackRow: View {
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
             if !track.isLocal {
+                #if os(macOS)
+                // A saved track already keeps the button visible through its own state.
+                TrackDownloadButton(track: track, isVisible: isHovering)
+                    // Keep download confirmation and in-flight button state bound
+                    // to their original song without replacing the whole row.
+                    .id(track.id)
+                #else
                 TrackDownloadButton(track: track, isVisible: isCompact || isHovering)
+                #endif
             }
-
             let liked = account.isLiked(track.id)
             Button {
                 Task { await account.toggleLike(trackID: track.id) }
@@ -293,14 +336,14 @@ struct TrackRow: View {
             Task { await account.toggleLike(trackID: track.id) }
         }
         Button("收藏到歌单…") {
-            showAddToPlaylist = true
+            addToPlaylistTrack = track
         }
         if !track.isLocal { TrackDownloadActions(track: track) }
         if let pid = removableFromPlaylistID {
             Button("从歌单中删除", role: .destructive) {
                 Task {
                     do {
-                        try await NeteaseAPI.playlistTracks(op: "del", playlistID: pid, trackIDs: [track.id])
+                        try await MusicAPI.playlistTracks(op: "del", playlistID: pid, trackIDs: [track.id])
                         onRemoved?()
                         ToastCenter.shared.show(String(localized: "已从歌单中删除"))
                     } catch {
@@ -313,11 +356,12 @@ struct TrackRow: View {
         if !account.isLiked(track.id), let onRecommendationReduced {
             Button(String(localized: "减少推荐"), role: .destructive) {
                 guard !isReducingRecommendation else { return }
-                isReducingRecommendation = true
+                let trackID = track.id
+                reducingRecommendationIDs.insert(trackID)
                 Task {
-                    defer { isReducingRecommendation = false }
+                    defer { reducingRecommendationIDs.remove(trackID) }
                     do {
-                        let replacement = try await NeteaseAPI.dislikeRecommendedSong(id: track.id)
+                        let replacement = try await MusicAPI.dislikeRecommendedSong(id: track.id)
                         onRecommendationReduced(replacement)
                         ToastCenter.shared.show(String(localized: "已减少推荐"))
                     } catch {
@@ -341,7 +385,7 @@ struct TrackRow: View {
         }
         Divider()
         Button("复制链接") {
-            Platform.copyToPasteboard(string: "https://music.163.com/#/song?id=\(track.id)")
+            Platform.copyToPasteboard(string: Upstream.songPageURL(id: track.id)?.absoluteString ?? "")
             ToastCenter.shared.show(String(localized: "链接已复制"))
         }
     }
@@ -534,6 +578,16 @@ final class SpectrumBarsView: PlatformView {
 // MARK: - Track list
 
 struct TrackListView: View {
+    enum Layout {
+        case stack
+        #if os(macOS)
+        /// One reusable native table cell, retaining the complete playback queue.
+        case singleRow(Int)
+        #endif
+    }
+
+    private let rowSpacing: CGFloat = 1
+
     let tracks: [Track]
     var style: TrackRowStyle = .full
     var allowsArtistNavigation: Bool = true
@@ -546,55 +600,73 @@ struct TrackListView: View {
     var recommendationContext: RecommendationContext?
     var onRecommendationReduced: ((Track, Track) -> Void)?
     var selection: Binding<Set<Int>>?
+    var layout: Layout = .stack
 
-    @EnvironmentObject private var player: PlayerService
+    // Playback state belongs to TrackRow; the list only starts playback.
+    private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @ObservedObject private var downloads = DownloadManager.shared
 
+    @ViewBuilder
     var body: some View {
-        LazyVStack(spacing: 1) {
-            ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                let recommendationHandler = onRecommendationReduced
-                let row = TrackRow(
-                    track: track,
-                    index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
-                    style: style,
-                    allowsArtistNavigation: allowsArtistNavigation,
-                    playability: playability(of: track),
-                    removableFromPlaylistID: removableFromPlaylistID,
-                    onRemoved: { onRemoved?(track) },
-                    onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
-                        ? nil
-                        : { replacement in recommendationHandler?(track, replacement) }
-                ) {
-                    player.play(tracks: playableTracks, source: source, startAt: track,
-                                context: context)
-                }
-                if let selection {
-                    let selected = selection.wrappedValue.contains(track.id)
-                    Button {
-                        if selected { selection.wrappedValue.remove(track.id) }
-                        else { selection.wrappedValue.insert(track.id) }
-                    } label: {
-                        HStack(spacing: 0) {
-                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 20))
-                                .foregroundStyle(selected ? Theme.accent : Color.secondary)
-                                .frame(width: 32)
-                            row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
-                        }
-                        .contentShape(Rectangle())
-                        .background(Theme.accent.opacity(selected ? 0.07 : 0),
-                                    in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+        switch layout {
+        case .stack:
+            LazyVStack(spacing: rowSpacing) { rows(in: tracks.indices) }
+        #if os(macOS)
+        case .singleRow(let index):
+            // The native table already provides one reusable cell. A keyed
+            // ForEach here would discard the entire row graph on every reuse.
+            row(at: index)
+        #endif
+        }
+    }
+
+    private func rows(in range: Range<Int>) -> some View {
+        ForEach(range.map { (index: $0, track: tracks[$0]) }, id: \.track.id) { index, _ in
+            row(at: index)
+        }
+    }
+
+    private func row(at index: Int) -> some View {
+        let track = tracks[index]
+        let recommendationHandler = onRecommendationReduced
+        let row = TrackRow(
+            track: track,
+            index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
+            style: style,
+            allowsArtistNavigation: allowsArtistNavigation,
+            playability: playability(of: track),
+            removableFromPlaylistID: removableFromPlaylistID,
+            onRemoved: { onRemoved?(track) },
+            onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
+                ? nil
+                : { replacement in recommendationHandler?(track, replacement) }
+        ) {
+            player.play(tracks: playableTracks, source: source, startAt: track,
+                        context: context)
+        }
+        return VStack(spacing: 0) {
+            if let selection {
+                let selected = selection.wrappedValue.contains(track.id)
+                Button {
+                    if selected { selection.wrappedValue.remove(track.id) }
+                    else { selection.wrappedValue.insert(track.id) }
+                } label: {
+                    HStack(spacing: 0) {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(selected ? Theme.accent : Color.secondary)
+                            .frame(width: 32)
+                        row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
-                    .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
-                    .accessibilityIdentifier("select-download-\(track.id)")
-                } else {
-                    row
+                    .contentShape(Rectangle())
+                    .background(Theme.accent.opacity(selected ? 0.07 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
                 }
-            }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
+                .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
+                .accessibilityIdentifier("select-download-\(track.id)")
+            } else { row }
         }
     }
 
@@ -682,7 +754,7 @@ struct AddToPlaylistSheet: View {
     private func add(to playlist: PlaylistSummary) {
         Task {
             do {
-                try await NeteaseAPI.playlistTracks(op: "add", playlistID: playlist.id, trackIDs: [track.id])
+                try await MusicAPI.playlistTracks(op: "add", playlistID: playlist.id, trackIDs: [track.id])
                 ToastCenter.shared.show(String(localized: "已收藏到「\(playlist.name)」"))
                 await account.refreshLibrary()
                 dismiss()
@@ -699,8 +771,8 @@ struct AddToPlaylistSheet: View {
         Task {
             defer { creating = false }
             do {
-                if let id = try await NeteaseAPI.createPlaylist(name: name, isPrivate: false) {
-                    try await NeteaseAPI.playlistTracks(op: "add", playlistID: id, trackIDs: [track.id])
+                if let id = try await MusicAPI.createPlaylist(name: name, isPrivate: false) {
+                    try await MusicAPI.playlistTracks(op: "add", playlistID: id, trackIDs: [track.id])
                     ToastCenter.shared.show(String(localized: "已收藏到「\(name)」"))
                     await account.refreshLibrary()
                     dismiss()

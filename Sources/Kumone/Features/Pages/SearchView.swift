@@ -18,8 +18,12 @@ final class SearchViewModel: ObservableObject {
     @Published var artists: [ArtistSummary] = []
     @Published var albums: [AlbumSummary] = []
     @Published var playlists: [PlaylistSummary] = []
-    @Published var isLoading = false
     @Published var loadedTabs: Set<Tab> = []
+    @Published private var loadingTabs: Set<Tab> = []
+    /// Bumped on every query change so responses to an older query are dropped.
+    private var generation = 0
+
+    var isLoading: Bool { !loadingTabs.isEmpty }
 
     init(query: String) {
         self.query = query
@@ -28,7 +32,9 @@ final class SearchViewModel: ObservableObject {
     func setQuery(_ newQuery: String) {
         guard newQuery != query else { return }
         query = newQuery
+        generation &+= 1
         loadedTabs.removeAll()
+        loadingTabs.removeAll()
         songs = []
         artists = []
         albums = []
@@ -39,28 +45,47 @@ final class SearchViewModel: ObservableObject {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !loadedTabs.contains(tab) else { return }
-        isLoading = true
-        defer { isLoading = false }
+        let requestGeneration = generation
         loadedTabs.insert(tab)
+        loadingTabs.insert(tab)
+        defer {
+            if generation == requestGeneration { loadingTabs.remove(tab) }
+        }
 
+        // A failed request leaves the tab unloaded so submitting again retries
+        // instead of keeping an empty result for this query.
         switch tab {
         case .all:
-            async let songsTask = try? NeteaseAPI.search(trimmed, type: .songs, limit: 12)
-            async let artistsTask = try? NeteaseAPI.search(trimmed, type: .artists, limit: 10)
-            async let albumsTask = try? NeteaseAPI.search(trimmed, type: .albums, limit: 10)
-            async let playlistsTask = try? NeteaseAPI.search(trimmed, type: .playlists, limit: 10)
-            songs = (await songsTask)?.songs ?? []
-            artists = (await artistsTask)?.artists ?? []
-            albums = (await albumsTask)?.albums ?? []
-            playlists = (await playlistsTask)?.playlists ?? []
+            async let songsTask = try? MusicAPI.search(trimmed, type: .songs, limit: 12)
+            async let artistsTask = try? MusicAPI.search(trimmed, type: .artists, limit: 10)
+            async let albumsTask = try? MusicAPI.search(trimmed, type: .albums, limit: 10)
+            async let playlistsTask = try? MusicAPI.search(trimmed, type: .playlists, limit: 10)
+            let (songResult, artistResult, albumResult, playlistResult) =
+                await (songsTask, artistsTask, albumsTask, playlistsTask)
+            guard generation == requestGeneration else { return }
+            songs = songResult?.songs ?? []
+            artists = artistResult?.artists ?? []
+            albums = albumResult?.albums ?? []
+            playlists = playlistResult?.playlists ?? []
+            if songResult == nil || artistResult == nil || albumResult == nil || playlistResult == nil {
+                loadedTabs.remove(tab)
+            }
         case .songs:
-            songs = (try? await NeteaseAPI.search(trimmed, type: .songs, limit: 100))?.songs ?? songs
+            let result = try? await MusicAPI.search(trimmed, type: .songs, limit: 100)
+            guard generation == requestGeneration else { return }
+            if let result { songs = result.songs ?? songs } else { loadedTabs.remove(tab) }
         case .artists:
-            artists = (try? await NeteaseAPI.search(trimmed, type: .artists, limit: 50))?.artists ?? artists
+            let result = try? await MusicAPI.search(trimmed, type: .artists, limit: 50)
+            guard generation == requestGeneration else { return }
+            if let result { artists = result.artists ?? artists } else { loadedTabs.remove(tab) }
         case .albums:
-            albums = (try? await NeteaseAPI.search(trimmed, type: .albums, limit: 50))?.albums ?? albums
+            let result = try? await MusicAPI.search(trimmed, type: .albums, limit: 50)
+            guard generation == requestGeneration else { return }
+            if let result { albums = result.albums ?? albums } else { loadedTabs.remove(tab) }
         case .playlists:
-            playlists = (try? await NeteaseAPI.search(trimmed, type: .playlists, limit: 50))?.playlists ?? playlists
+            let result = try? await MusicAPI.search(trimmed, type: .playlists, limit: 50)
+            guard generation == requestGeneration else { return }
+            if let result { playlists = result.playlists ?? playlists } else { loadedTabs.remove(tab) }
         }
     }
 }
@@ -68,7 +93,6 @@ final class SearchViewModel: ObservableObject {
 struct SearchView: View {
     @StateObject private var model: SearchViewModel
     @State private var searchText: String = ""
-    @EnvironmentObject private var player: PlayerService
 
     init(query: String) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
@@ -76,36 +100,19 @@ struct SearchView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Picker("", selection: $model.tab) {
-                        ForEach(SearchViewModel.Tab.allCases) { tab in
-                            Text(LocalizedStringKey(tab.rawValue)).tag(tab)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .padding(.horizontal, Theme.Layout.contentInset)
-                    .padding(.top, 12)
-
-                    if model.isLoading && currentEmpty {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, minHeight: 300)
-                    } else {
-                        tabContent
-                    }
-                } else {
-                    emptySearchPrompt
-                }
-                PlayerClearanceSpacer()
-            }
-        }
+        searchContent
         #if os(iOS)
         // iPad enters SearchView from the sidebar, where the desktop window
         // toolbar search field is unavailable. On macOS, MainWindow owns the
         // only search field and navigates here with its submitted query.
-        .searchable(text: $searchText, prompt: "搜索歌曲、歌手、专辑、歌单")
+        // Keep the field pinned under the title. The default drawer collapses
+        // until the page scrolls, and the empty search page has nothing to
+        // scroll, so the field stayed hidden on the iPhone Search tab.
+        .searchable(
+            text: $searchText,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "搜索歌曲、歌手、专辑、歌单"
+        )
         .onSubmit(of: .search) {
             model.setQuery(searchText)
             Task { await model.load(tab: model.tab) }
@@ -124,6 +131,63 @@ struct SearchView: View {
         .task(id: model.tab) {
             await model.load(tab: model.tab)
         }
+    }
+
+    @ViewBuilder
+    private var searchContent: some View {
+        #if os(macOS)
+        if model.tab == .songs, !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+            TrackListScrollView(trackIDs: model.songs.map(\.id)) {
+                VStack(spacing: 20) {
+                    tabPicker
+                    if model.isLoading && currentEmpty {
+                        ProgressView().frame(maxWidth: .infinity, minHeight: 300)
+                    }
+                }
+            } rows: { layout in
+                TrackListView(tracks: model.songs, layout: layout)
+                    .padding(.horizontal, Theme.Layout.contentInset - 10)
+            } footer: {
+                PlayerClearanceSpacer()
+            }
+        } else {
+            mixedResults.clipped()
+        }
+        #else
+        mixedResults
+        #endif
+    }
+
+    private var mixedResults: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    tabPicker
+
+                    if model.isLoading && currentEmpty {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, minHeight: 300)
+                    } else {
+                        tabContent
+                    }
+                } else {
+                    emptySearchPrompt
+                }
+                PlayerClearanceSpacer()
+            }
+        }
+    }
+
+    private var tabPicker: some View {
+        Picker("", selection: $model.tab) {
+            ForEach(SearchViewModel.Tab.allCases) { tab in
+                Text(LocalizedStringKey(tab.rawValue)).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, Theme.Layout.contentInset)
+        .padding(.top, 12)
     }
 
     private var emptySearchPrompt: some View {
