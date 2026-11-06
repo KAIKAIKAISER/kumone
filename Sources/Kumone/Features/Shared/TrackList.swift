@@ -48,7 +48,6 @@ struct TrackRow: View {
     /// Only this track's download state, so another row's transfer cannot
     /// re-evaluate this body four times a second.
     @ObservedObject private var downloadState: TrackDownloadState
-    @ObservedObject private var settings = SettingsManager.shared
 
     init(track: Track, index: Int, style: TrackRowStyle = .full,
          allowsArtistNavigation: Bool = true, playability: TrackPlayability = .playable,
@@ -198,7 +197,7 @@ struct TrackRow: View {
 
     @ViewBuilder
     private var artwork: some View {
-        if !settings.disableCoverNavigation, track.album.id > 0, !track.album.name.isEmpty {
+        if track.album.id > 0, !track.album.name.isEmpty {
             Button {
                 openDestination(.album(track.album.id))
             } label: {
