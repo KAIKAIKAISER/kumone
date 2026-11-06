@@ -43,7 +43,7 @@ struct AudioCacheTests {
             trackID: 1,
             requestedQuality: "lossless",
             servedQuality: "exhigh",
-            source: .netease,
+            source: .origin,
             into: cache
         )
 
@@ -54,7 +54,7 @@ struct AudioCacheTests {
         )
 
         #expect(entry?.metadata.servedQuality == "exhigh")
-        #expect(entry?.metadata.source == .netease)
+        #expect(entry?.metadata.source == .origin)
         #expect(try await cache.entry(
             for: 1,
             requestedQuality: "standard",
@@ -126,14 +126,14 @@ struct AudioCacheTests {
             trackID: 3,
             requestedQuality: "exhigh",
             servedQuality: "exhigh",
-            source: .netease,
+            source: .origin,
             into: cache
         )
         try await write(
             trackID: 4,
             requestedQuality: "exhigh",
             servedQuality: "exhigh",
-            source: .netease,
+            source: .origin,
             into: cache
         )
         let playingEntry = try #require(await cache.entry(
@@ -162,7 +162,7 @@ struct AudioCacheTests {
             trackID: 5,
             requestedQuality: "exhigh",
             servedQuality: "exhigh",
-            source: .netease,
+            source: .origin,
             fileExtension: "mp3",
             maximumSizeMB: 500
         )
@@ -199,7 +199,7 @@ struct AudioCacheTests {
             trackID: 8,
             requestedQuality: "hires",
             servedQuality: "hires",
-            source: .netease,
+            source: .origin,
             fileExtension: "flac",
             maximumSizeMB: 1_000
         )
@@ -230,7 +230,7 @@ struct AudioCacheTests {
             trackID: 6,
             requestedQuality: "exhigh",
             servedQuality: "exhigh",
-            source: .netease,
+            source: .origin,
             fileExtension: "mp3",
             maximumSizeMB: 500
         )

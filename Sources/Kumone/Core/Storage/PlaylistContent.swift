@@ -22,16 +22,16 @@ final class PlaylistContent: ObservableObject {
     private var recommendationReplacements: [Int: Track] = [:]
     private var removedTrackIDs: Set<Int> = []
     private var loadGeneration = 0
-    private let detailLoader: (Int) async throws -> NeteaseAPI.PlaylistDetailResponse
-    private let tracksLoader: ([Int]) async throws -> NeteaseAPI.SongDetailResponse
+    private let detailLoader: (Int) async throws -> MusicAPI.PlaylistDetailResponse
+    private let tracksLoader: ([Int]) async throws -> MusicAPI.SongDetailResponse
     private let snapshots: PlaylistSnapshotStore?
     private let accountScope: @MainActor () -> String?
 
     init(playlistID: Int,
          snapshots: PlaylistSnapshotStore? = .shared,
          accountScope: @escaping @MainActor () -> String? = { AccountStore.shared.offlineScope },
-         detailLoader: @escaping (Int) async throws -> NeteaseAPI.PlaylistDetailResponse = { try await NeteaseAPI.playlistDetail(id: $0) },
-         tracksLoader: @escaping ([Int]) async throws -> NeteaseAPI.SongDetailResponse = { try await NeteaseAPI.songDetails(ids: $0) }) {
+         detailLoader: @escaping (Int) async throws -> MusicAPI.PlaylistDetailResponse = { try await MusicAPI.playlistDetail(id: $0) },
+         tracksLoader: @escaping ([Int]) async throws -> MusicAPI.SongDetailResponse = { try await MusicAPI.songDetails(ids: $0) }) {
         self.playlistID = playlistID
         self.detailLoader = detailLoader
         self.tracksLoader = tracksLoader
@@ -120,8 +120,7 @@ final class PlaylistContent: ObservableObject {
             detail = loaded
             tracks = loaded.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
             let ids = Set(loaded.trackIds.map(\.id))
-            privileges = privileges.filter { ids.contains($0.key) }
-            merge(privileges: response.privileges)
+            merge(privileges: response.privileges, retaining: ids)
             isLoading = false
             await save(scope: scope, token: token)
             try await loadRemainingTracks(generation: generation, scope: scope, token: token, background: background)
@@ -169,10 +168,15 @@ final class PlaylistContent: ObservableObject {
         try? await snapshots.save(.init(detail: detail, privileges: privileges), scope: scope, token: token)
     }
 
-    private func merge(privileges list: [TrackPrivilege]?) {
+    private func merge(privileges list: [TrackPrivilege]?, retaining ids: Set<Int>? = nil) {
+        // Publish a complete response once. Mutating the @Published dictionary
+        // per song notifies every observer and can copy a retained dictionary
+        // for each of the 500 entries in a page.
+        var merged = ids.map { ids in privileges.filter { ids.contains($0.key) } } ?? privileges
         for privilege in list ?? [] {
-            privileges[privilege.id] = privilege
+            merged[privilege.id] = privilege
         }
+        if merged != privileges { privileges = merged }
     }
 
     func remove(_ track: Track) async {

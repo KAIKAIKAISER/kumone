@@ -36,6 +36,12 @@ public struct IOSMainWindow: View {
     public init() {}
 
     public var body: some View {
+        UpstreamGate { gatedBody }
+            .tint(Theme.accent)
+            .preferredColorScheme(settings.appearance.colorScheme)
+    }
+
+    private var gatedBody: some View {
         presentationRoot
             .modifier(OfflinePlaybackAlert(player: player, onDownloads: { openDestination(.downloaded) }, enabled: !player.showNowPlaying))
             .modifier(MeteredDownloadAlert(enabled: !player.showNowPlaying))
@@ -48,10 +54,11 @@ public struct IOSMainWindow: View {
             .preferredColorScheme(settings.appearance.colorScheme)
             .environment(\.openLogin, { showLogin = true })
             .environment(\.openDestination, openDestination)
+            .modifier(PlaybackLifecycle())
             .task {
                 await DownloadManager.shared.start()
                 await account.bootstrap()
-                if settings.autoCheckUpdates {
+                if settings.autoCheckUpdates, DistributionChannel.current.allowsSelfUpdate {
                     IOSUpdater.shared.check(interactive: false)
                 }
             }
@@ -76,13 +83,19 @@ public struct IOSMainWindow: View {
                     .environmentObject(toasts)
             }
             .overlay(alignment: .top) {
-                if let toast = toasts.current {
-                    ToastView(toast: toast)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .padding(.top, 8)
+                VStack(spacing: 8) {
+                    if let toast = toasts.current {
+                        ToastView(toast: toast)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    if !player.hasCurrentTrack {
+                        PlaybackHandoffBanner()
+                    }
                 }
+                .padding(.top, 8)
             }
             .animation(.spring(duration: 0.3), value: toasts.current)
+            .animation(.spring(duration: 0.35), value: player.hasCurrentTrack)
     }
 
     @ViewBuilder
@@ -310,6 +323,7 @@ public struct IOSMainWindow: View {
         NavigationStack(path: binding(for: tab)) {
             content().appDestinations()
         }
+        .publishesWindowHorizontalInsets()
     }
 
     @ViewBuilder
@@ -395,18 +409,26 @@ private struct MiniPlayerAccessoryModifier: ViewModifier {
 @available(iOS 26.0, *)
 private struct IOSMiniPlayerAccessory: View {
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    @State private var lastKnownPlacementIsInline: Bool?
     let transitionNamespace: Namespace.ID
 
     var body: some View {
         IOSMiniPlayerBar(presentation: presentation)
             // Match the complete system accessory, never only its artwork.
             .nowPlayingTransitionSource(in: transitionNamespace)
+            .onChange(of: placementIsInline, initial: true) { _, isInline in
+                if let isInline { lastKnownPlacementIsInline = isInline }
+            }
+    }
+
+    private var placementIsInline: Bool? {
+        placement.map { $0 == .inline }
     }
 
     private var presentation: IOSMiniPlayerBar.Presentation {
-        let placementIsInline = placement.map { $0 == .inline }
-        return NowPlayingPresentationMetrics.shouldUseInlineMiniPlayerLayout(
-            placementIsInline: placementIsInline
+        NowPlayingPresentationMetrics.shouldUseInlineMiniPlayerLayout(
+            placementIsInline: placementIsInline,
+            lastKnownPlacementIsInline: lastKnownPlacementIsInline
         ) ? .inlineAccessory : .bottomAccessory
     }
 }
@@ -474,6 +496,7 @@ struct IOSMiniPlayerBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(nowPlayingAccessibilityLabel)
             .accessibilityHint("打开正在播放")
+            .accessibilityIdentifier("mini-player-now-playing")
 
             if !presentation.isInline {
                 Button(action: player.previous) {
@@ -603,6 +626,7 @@ struct IOSLibraryView: View {
         List {
             // Profile / Login header
             Section {
+                SyncedLoginButtons()
                 if let profile = account.profile {
                     HStack(spacing: 14) {
                         CachedAsyncImage(url: profile.avatarUrl?.resizedImageURL(128))
@@ -634,7 +658,7 @@ struct IOSLibraryView: View {
                                 .font(.system(size: 32))
                                 .foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("登录网易云音乐")
+                                Text("登录账号")
                                     .font(.headline)
                                     .foregroundStyle(.primary)
                                 Text("同步我喜欢的音乐、歌单与每日推荐")
@@ -749,6 +773,7 @@ struct IOSLibraryView: View {
                 } label: {
                     Image(systemName: "gearshape")
                 }
+                .accessibilityLabel("设置")
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -772,7 +797,7 @@ struct IOSLibraryView: View {
                 guard !name.isEmpty else { return }
                 Task {
                     do {
-                        try await NeteaseAPI.createPlaylist(name: name, isPrivate: false)
+                        try await MusicAPI.createPlaylist(name: name, isPrivate: false)
                         await account.refreshLibrary()
                         ToastCenter.shared.show(String(localized: "歌单已创建"))
                     } catch {

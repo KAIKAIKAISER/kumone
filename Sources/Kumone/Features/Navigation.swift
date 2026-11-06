@@ -26,13 +26,12 @@ extension EnvironmentValues {
 
 struct PlayerChromeModifier: ViewModifier {
     @EnvironmentObject private var player: PlayerService
-    let detailWidth: CGFloat
+    let geometry: MainColumnGeometry
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .bottomTrailing) {
-                PlayerBar()
-                    .frame(width: detailWidth)
+                MainColumnPlayerBar(geometry: geometry)
             }
             .overlay(alignment: .trailing) {
                 rightPanel
@@ -59,6 +58,14 @@ struct PlayerChromeModifier: ViewModifier {
     }
 }
 
+private struct MainColumnPlayerBar: View {
+    @ObservedObject var geometry: MainColumnGeometry
+
+    var body: some View {
+        PlayerBar().frame(width: geometry.layout.width)
+    }
+}
+
 enum SidebarItem: Hashable {
     case downloaded
     case home
@@ -70,7 +77,6 @@ enum SidebarItem: Hashable {
     case recents
     case collections
     case cloud
-    case downloads
     case playlist(Int)
 }
 
@@ -85,7 +91,6 @@ enum Destination: Hashable {
     case recents
     case collections
     case cloud
-    case downloads
     case search(String)
 }
 
@@ -124,8 +129,6 @@ struct DestinationsModifier: ViewModifier {
                     CollectionsView()
                 case .cloud:
                     CloudView()
-                case .downloads:
-                    DownloadedMusicView()
                 case .search(let query):
                     SearchView(query: query)
                 }
@@ -136,8 +139,8 @@ struct DestinationsModifier: ViewModifier {
 }
 
 extension View {
-    func playerChrome(detailWidth: CGFloat) -> some View {
-        modifier(PlayerChromeModifier(detailWidth: detailWidth))
+    func playerChrome(geometry: MainColumnGeometry) -> some View {
+        modifier(PlayerChromeModifier(geometry: geometry))
     }
 
     /// Pages clear the floating player bar with an explicit trailing

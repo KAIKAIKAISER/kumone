@@ -2,11 +2,13 @@ import Foundation
 import CryptoKit
 import os.log
 
-enum NeteaseAPIError: LocalizedError {
+enum MusicAPIError: LocalizedError {
     case http(Int)
     case business(code: Int, message: String?)
     case needLogin
     case decoding(String)
+    /// The first-launch questions have not been answered, so there is no host.
+    case notConfigured
 
     var errorDescription: String? {
         switch self {
@@ -14,27 +16,57 @@ enum NeteaseAPIError: LocalizedError {
         case .business(let code, let message): return message ?? String(localized: "接口错误 (\(code))")
         case .needLogin: return String(localized: "需要登录")
         case .decoding: return String(localized: "数据加载失败，请稍后重试")
+        case .notConfigured: return String(localized: "请先完成首次使用的设置")
         }
     }
 }
 
-/// Transport layer for NetEase Cloud Music. Owns the cookie jar and performs
-/// weapi / eapi encrypted requests.
-final class NeteaseClient: @unchecked Sendable {
-    static let shared: NeteaseClient = {
+/// Transport layer. Owns the cookie jar and performs eapi encrypted requests,
+/// and the few plain web API ones eapi refuses. Hosts come from ``Upstream``.
+final class MusicClient: @unchecked Sendable {
+    static let shared: MusicClient = {
         #if DEBUG
         if KumonePaths.isOfflineUITest {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [OfflineUITestProtocol.self]
-            return NeteaseClient(configuration: configuration)
+            return MusicClient(configuration: configuration)
         }
         #endif
-        return NeteaseClient()
+        return MusicClient()
     }()
 
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "api")
-    private static let userAgent =
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "api")
+    private static let webUserAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+
+    // The desktop client the eapi requests speak as.
+    private static let eapiUserAgent = "\(Upstream.clientName) 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)"
+    private static let eapiAppVersion = "3.1.17.204416"
+    private static let eapiOSVersion = "Microsoft-Windows-10-Professional-build-19045-64bit"
+    private static let eapiChannel = Upstream.tag
+
+    /// The device ID the eapi header carries, made once and kept beside the
+    /// cookies: the service trusts a device it has seen before, and a constant
+    /// every install shares looks like no device at all. It is no secret, so
+    /// it stays out of the keychain.
+    static let deviceID: String = loadDeviceID(in: KumonePaths.applicationSupport)
+
+    static func loadDeviceID(in directory: URL?) -> String {
+        let url = directory?.appendingPathComponent("device-id")
+        if let url, let data = try? Data(contentsOf: url),
+           let stored = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           stored.count == 52, stored.allSatisfy(\.isHexDigit) {
+            return stored
+        }
+        let hex = Array("0123456789ABCDEF")
+        let id = String((0..<52).map { _ in hex.randomElement()! })
+        if let url {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? Data(id.utf8).write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
+        return id
+    }
 
     private let session: URLSession
     private let cookieLock = NSLock()
@@ -44,19 +76,22 @@ final class NeteaseClient: @unchecked Sendable {
     private static let bindingKey = "__kumone_session_binding"
     private var sessionBinding: String?
     private var authEpoch: UInt64 = 0
-    private let cookieFileURL: URL
+    private let cookieFileURL: URL?
 
-    init(cookieDirectory: URL? = nil, configuration: URLSessionConfiguration? = nil) {
+    init(cookieDirectory: URL? = nil, configuration: URLSessionConfiguration? = nil, persistsCookies: Bool = true) {
         let config = configuration ?? URLSessionConfiguration.default
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
         config.timeoutIntervalForRequest = 15
         session = URLSession(configuration: config)
 
+        guard persistsCookies else { cookieFileURL = nil; return }
+
         let support = cookieDirectory ?? KumonePaths.applicationSupport
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        cookieFileURL = support.appendingPathComponent("cookies.json")
-        if let data = try? Data(contentsOf: cookieFileURL),
+        let url = support.appendingPathComponent("cookies.json")
+        cookieFileURL = url
+        if let data = try? Data(contentsOf: url),
            let stored = try? JSONDecoder().decode([String: String].self, from: data) {
             cookies = stored
             let savedBinding = cookies.removeValue(forKey: Self.bindingKey)
@@ -115,6 +150,35 @@ final class NeteaseClient: @unchecked Sendable {
         return true
     }
 
+    /// Commit a verified sign-in durably before changing the live cookie jar.
+    /// Disk failures leave the current authentication untouched.
+    func replaceAuthentication(with authentication: [String: String]) throws {
+        guard let token = authentication["MUSIC_U"], !token.isEmpty else { throw MusicAPIError.needLogin }
+        cookieWriteLock.lock(); defer { cookieWriteLock.unlock() }
+        cookieLock.lock()
+        var snapshot = cookies
+        cookieLock.unlock()
+        snapshot.removeValue(forKey: "MUSIC_U")
+        snapshot.removeValue(forKey: "__csrf")
+        snapshot.merge(authentication.filter { ["MUSIC_U", "__csrf"].contains($0.key) }) { _, new in new }
+        try commitAuthentication(snapshot, binding: Self.fingerprint(token))
+    }
+
+    /// The caller holds cookieWriteLock so a failed disk write cannot leave the
+    /// persisted and live authentication states disagreeing.
+    private func commitAuthentication(_ snapshot: [String: String], binding: String?) throws {
+        if let cookieFileURL {
+            var stored = snapshot
+            stored[Self.bindingKey] = binding
+            try JSONEncoder().encode(stored).write(to: cookieFileURL, options: .atomic)
+        }
+        cookieLock.lock()
+        cookies = snapshot
+        sessionBinding = binding
+        authEpoch += 1
+        cookieLock.unlock()
+    }
+
     /// Ingests a `;;`-joined raw cookie string as returned by the QR login check.
     func ingestCookieString(_ raw: String) {
         setCookies(Self.parseCookieString(raw))
@@ -135,19 +199,18 @@ final class NeteaseClient: @unchecked Sendable {
         return parsed
     }
 
-    func clearAuthCookies() {
+    func clearAuthCookies() throws {
         cookieWriteLock.lock(); defer { cookieWriteLock.unlock() }
         cookieLock.lock()
-        authEpoch += 1
-        sessionBinding = nil
-        cookies.removeValue(forKey: "MUSIC_U")
-        cookies.removeValue(forKey: "__csrf")
-        let snapshot = cookies
+        var snapshot = cookies
         cookieLock.unlock()
-        persist(snapshot)
+        snapshot.removeValue(forKey: "MUSIC_U")
+        snapshot.removeValue(forKey: "__csrf")
+        try commitAuthentication(snapshot, binding: nil)
     }
 
     private func persist(_ snapshot: [String: String]) {
+        guard let cookieFileURL else { return }
         if let data = try? JSONEncoder().encode(snapshot) {
             try? data.write(to: cookieFileURL, options: .atomic)
         }
@@ -181,83 +244,69 @@ final class NeteaseClient: @unchecked Sendable {
 
     // MARK: - Requests
 
-    /// POST to a public `/api` endpoint that does not require weapi/eapi encryption.
-    func api(_ path: String, _ payload: [String: Any] = [:]) async throws -> Data {
+    /// POST to `https://<web host>/api<path>` with a plain form, as a
+    /// browser. Only for what the risk control refuses through the eapi
+    /// with -460, 检测到您的网络环境存在风险: the phone-number login and
+    /// following an artist.
+    func api(_ path: String, _ form: [String: String] = [:]) async throws -> Data {
         let authentication = authenticationState
-        guard let url = URL(string: "https://music.163.com/api\(path)") else {
-            throw NeteaseAPIError.http(-1)
+        guard let host = Upstream.webHost, let url = URL(string: "https://\(host)/api\(path)") else {
+            throw MusicAPIError.notConfigured
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        request.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://\(host)/", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(cookieHeader(extra: ["os": "pc", "appver": "3.1.17"]), forHTTPHeaderField: "Cookie")
-        request.httpBody = Self.encodeForm(payload.mapValues { String(describing: $0) })
+        request.setValue(cookieHeader(extra: [:]), forHTTPHeaderField: "Cookie")
+        request.httpBody = Self.encodeForm(form)
         return try await perform(request, authentication: authentication)
     }
 
-    /// POST to `https://music.163.com/weapi<path>` with weapi encryption.
-    func weapi(_ path: String, _ payload: [String: Any] = [:],
-               cookieOverrides: [String: String] = [:], absorbResponseCookies: Bool = true) async throws -> Data {
-        let authentication = authenticationState
-        var body = payload
-        let csrf = cookieOverrides["__csrf"] ?? cookie(named: "__csrf")
-        body["csrf_token"] = csrf ?? ""
-        let json = try JSONSerialization.data(withJSONObject: body)
-        let form = NeteaseCrypto.weapi(payload: json)
-
-        var fullPath = path
-        if let csrf, !csrf.isEmpty {
-            fullPath += (fullPath.contains("?") ? "&" : "?") + "csrf_token=\(csrf)"
-        }
-        let url = URL(string: "https://music.163.com/weapi\(fullPath)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(cookieHeader(extra: ["os": "pc", "appver": "3.1.17"], overrides: cookieOverrides),
-                         forHTTPHeaderField: "Cookie")
-        request.httpBody = Self.encodeForm(form)
-        return try await perform(request, authentication: authentication, absorbResponseCookies: absorbResponseCookies)
-    }
-
-    /// POST to `https://interface.music.163.com/eapi<path>` with eapi encryption.
+    /// POST to `https://<interface host>/eapi<path>` with eapi encryption.
     /// The digest is computed over the corresponding `/api<path>` path.
+    /// Sent as the desktop client from this install's device, header and
+    /// cookie alike: the risk control
+    /// refuses some writes from a client it does not recognize, so requests
+    /// go this way unless they are refused through it.
     func eapi(_ path: String, _ payload: [String: Any] = [:],
-              cookieOverrides: [String: String] = [:]) async throws -> Data {
+              cookieOverrides: [String: String] = [:], absorbResponseCookies: Bool = true) async throws -> Data {
         let authentication = authenticationState
+        guard let webHost = Upstream.webHost, let interfaceHost = Upstream.interfaceHost,
+              let url = URL(string: "https://\(interfaceHost)/eapi\(path)") else {
+            throw MusicAPIError.notConfigured
+        }
         let apiPath = "/api" + path
         var body = payload
+        let now = Date().timeIntervalSince1970
         var header: [String: String] = [
+            "osver": Self.eapiOSVersion,
+            "deviceId": Self.deviceID,
             "os": "pc",
-            "appver": "3.1.17",
-            "osver": "Version 14.0 (Build 23A344)",
-            "deviceId": "kumone",
-            "requestId": String(Int.random(in: 20_000_000...30_000_000)),
-            "clientSign": "",
+            "appver": Self.eapiAppVersion,
             "versioncode": "140",
-            "buildver": String(Int(Date().timeIntervalSince1970)),
+            "mobilename": "",
+            "buildver": String(Int(now)),
             "resolution": "1920x1080",
-            "channel": "",
+            "channel": Self.eapiChannel,
+            "requestId": String(format: "%lld_%04d", Int64(now * 1000), Int(now * 1_000_000) % 1000),
+            "__csrf": cookie(named: "__csrf") ?? "",
         ]
         if let musicU = cookie(named: "MUSIC_U") { header["MUSIC_U"] = musicU }
-        if let csrf = cookie(named: "__csrf") { header["__csrf"] = csrf }
+        if let nmtid = cookie(named: "NMTID") { header["NMTID"] = nmtid }
         body["header"] = header
+        body["e_r"] = false
         let json = try JSONSerialization.data(withJSONObject: body)
-        let form = NeteaseCrypto.eapi(apiPath: apiPath, payload: json)
+        let form = RequestCrypto.eapi(apiPath: apiPath, payload: json)
 
-        let url = URL(string: "https://interface.music.163.com/eapi\(path)")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        request.setValue(Self.eapiUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://\(webHost)", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(cookieHeader(extra: ["os": "pc", "appver": "3.1.17"], overrides: cookieOverrides),
-                         forHTTPHeaderField: "Cookie")
+        request.setValue(cookieHeader(extra: header, overrides: cookieOverrides), forHTTPHeaderField: "Cookie")
         request.httpBody = Self.encodeForm(form)
-        return try await perform(request, authentication: authentication)
+        return try await perform(request, authentication: authentication, absorbResponseCookies: absorbResponseCookies)
     }
 
     private func perform(_ request: URLRequest, authentication: (epoch: UInt64, binding: String?), absorbResponseCookies: Bool = true) async throws -> Data {
@@ -268,8 +317,8 @@ final class NeteaseClient: @unchecked Sendable {
         guard anonymous || isCurrent(authentication) else { throw CancellationError() }
         let (data, response) = try await session.data(for: request)
         guard anonymous || isCurrent(authentication) else { throw CancellationError() }
-        guard let http = response as? HTTPURLResponse else { throw NeteaseAPIError.http(-1) }
-        let refreshSucceeded = request.url?.path == "/weapi/login/token/refresh"
+        guard let http = response as? HTTPURLResponse else { throw MusicAPIError.http(-1) }
+        let refreshSucceeded = request.url?.path == "/eapi/login/token/refresh"
             && (200..<300).contains(http.statusCode)
             && (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["code"] as? Int == 200
         if absorbResponseCookies,
@@ -280,7 +329,7 @@ final class NeteaseClient: @unchecked Sendable {
         }
         guard (200..<300).contains(http.statusCode) else {
             Self.log.error("HTTP \(http.statusCode) for \(request.url?.path ?? "?")")
-            throw NeteaseAPIError.http(http.statusCode)
+            throw MusicAPIError.http(http.statusCode)
         }
         return data
     }
@@ -289,15 +338,15 @@ final class NeteaseClient: @unchecked Sendable {
     func decoded<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let code = obj["code"] as? Int, code != 200 {
-            if code == 301 { throw NeteaseAPIError.needLogin }
+            if code == 301 { throw MusicAPIError.needLogin }
             let message = (obj["message"] as? String) ?? (obj["msg"] as? String)
-            throw NeteaseAPIError.business(code: code, message: message)
+            throw MusicAPIError.business(code: code, message: message)
         }
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
             Self.log.error("Decoding \(String(describing: T.self)) failed: \(error)")
-            throw NeteaseAPIError.decoding(String(describing: error))
+            throw MusicAPIError.decoding(String(describing: error))
         }
     }
 

@@ -27,9 +27,9 @@ struct ArtistPlaylistsTests {
           ]
         }
         """#.utf8)
-        let response = try JSONDecoder().decode(NeteaseAPI.UserPlaylistsResponse.self, from: data)
+        let response = try JSONDecoder().decode(MusicAPI.UserPlaylistsResponse.self, from: data)
 
-        let result = NeteaseAPI.playlistsCreated(
+        let result = MusicAPI.playlistsCreated(
             by: "Example Artist", from: response.playlist
         )
 
@@ -49,7 +49,7 @@ struct ArtistPlaylistsTests {
         }
         """#.utf8)
 
-        let response = try JSONDecoder().decode(NeteaseAPI.ArtistSongsResponse.self, from: data)
+        let response = try JSONDecoder().decode(MusicAPI.ArtistSongsResponse.self, from: data)
 
         #expect(response.songs.first?.name == "Song")
         #expect(response.more == true)

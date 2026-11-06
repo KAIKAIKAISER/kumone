@@ -1,5 +1,4 @@
 #if os(iOS)
-import Combine
 import AVFoundation
 import Combine
 import Foundation
@@ -17,7 +16,7 @@ enum RepeatMode: String, CaseIterable {
 }
 
 /// Where the current queue came from — used for scrobbling and UI affordances.
-enum PlaySource: Equatable {
+enum PlaySource: Codable, Equatable {
     case playlist(Int)
     case album(Int)
     case artist(Int)
@@ -120,6 +119,7 @@ final class PlayerService: ObservableObject {
     @Published private(set) var playNextList: [Track] = []
     @Published private(set) var currentIndex = -1
     @Published private(set) var currentTrack: Track?
+    private var playbackAccountID: Int?
     @Published private(set) var source: PlaySource = .none
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
@@ -180,6 +180,7 @@ final class PlayerService: ObservableObject {
     // MARK: - Engine
 
     private let engine = AVPlayer()
+    private var lastPlaybackCheckpoint = ContinuousClock.now
 
     /// Live playback position straight from the player, for smooth per-frame
     /// karaoke highlighting (the published `progress` is intentionally coarse).
@@ -300,6 +301,9 @@ final class PlayerService: ObservableObject {
                     self.progress = seconds
                     NowPlayingManager.shared.updateElapsed(seconds, rate: self.isPlaying ? 1 : 0)
                 }
+                if self.isPlaying, self.lastPlaybackCheckpoint.duration(to: .now) >= .seconds(20) {
+                    self.persistState()
+                }
             }
         }
 
@@ -309,7 +313,7 @@ final class PlayerService: ObservableObject {
             }
         }
 
-        NowPlayingManager.shared.attach(to: self)
+        NowPlayingManager.shared.attach(to: self, avPlayer: engine)
         offlineActivatedScope = AccountStore.shared.offlineScope
         networkObservation = DownloadManager.shared.$network.removeDuplicates().sink { [weak self] network in
             self?.networkState = network
@@ -340,6 +344,7 @@ final class PlayerService: ObservableObject {
                 // The system already silenced us; sync our state and UI.
                 isPlaying = false
                 NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+                persistState()
             }
         case .ended:
             let optionsValue = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
@@ -401,12 +406,11 @@ final class PlayerService: ObservableObject {
     func togglePlayPause() {
         guard let track = currentTrack else { return }
         if isPlaying {
-            engine.pause()
-            isPlaying = false
-            AudioSpectrum.shared.reset()
+            pause()
+            return
         } else if engine.currentItem == nil {
             // Restored session: re-resolve the source.
-            startPlaying(track, indexUnchanged: true)
+            startPlaying(track, resumeAt: progress)
             return
         } else {
             engine.play()
@@ -421,6 +425,7 @@ final class PlayerService: ObservableObject {
         isPlaying = false
         AudioSpectrum.shared.reset()
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+        persistState()
     }
 
     func next() {
@@ -463,6 +468,7 @@ final class PlayerService: ObservableObject {
             Task { @MainActor in completion() }
         }
         NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
+        persistState()
     }
 
     func toggleShuffle() {
@@ -506,7 +512,7 @@ final class PlayerService: ObservableObject {
     func jumpTo(_ track: Track) {
         if let nextIdx = playNextList.firstIndex(where: { $0.id == track.id }) {
             playNextList.removeSubrange(0...nextIdx)
-            startPlaying(track, indexUnchanged: true)
+            startPlaying(track)
             return
         }
         if let idx = activeQueue.firstIndex(where: { $0.id == track.id }) {
@@ -532,17 +538,15 @@ final class PlayerService: ObservableObject {
     /// the listener clicked rather than its first occurrence.
     func jumpToUpcoming(at index: Int, matching trackID: Int) {
         guard let selected = upcomingCandidate(at: index, matching: trackID) else { return }
-        var indexUnchanged = false
         switch selected.origin {
         case .inserted(let offset):
             playNextList.removeSubrange(0...offset)
-            indexUnchanged = true
         case .queue(let offset):
             if !playNextList.isEmpty { playNextList.removeAll() }
             currentIndex = offset
         case .fm: return
         }
-        startPlaying(selected.track, indexUnchanged: indexUnchanged)
+        startPlaying(selected.track)
     }
 
     /// Removes the row itself: a repeated song leaves the occurrence the
@@ -601,7 +605,7 @@ final class PlayerService: ObservableObject {
         guard isFMMode, let track = currentTrack else { return }
         Task {
             await fmAdvance()
-            try? await NeteaseAPI.fmTrash(id: track.id)
+            try? await MusicAPI.fmTrash(id: track.id)
         }
     }
 
@@ -612,7 +616,7 @@ final class PlayerService: ObservableObject {
         }
         if fmUpcoming.isEmpty {
             for attempt in 0..<3 {
-                if let tracks = try? await NeteaseAPI.personalFM(), !tracks.isEmpty {
+                if let tracks = try? await MusicAPI.personalFM(), !tracks.isEmpty {
                     fmUpcoming = tracks
                     break
                 }
@@ -626,9 +630,9 @@ final class PlayerService: ObservableObject {
         guard !fmUpcoming.isEmpty else { return }
         let track = fmUpcoming.removeFirst()
         pendingAutoAdvance = true
-        startPlaying(track, indexUnchanged: true)
+        startPlaying(track)
         if fmUpcoming.count < 1 {
-            if let more = try? await NeteaseAPI.personalFM() {
+            if let more = try? await MusicAPI.personalFM() {
                 fmUpcoming.append(contentsOf: more)
             }
         }
@@ -649,7 +653,7 @@ final class PlayerService: ObservableObject {
         if !playNextList.isEmpty {
             let track = playNextList.removeFirst()
             pendingAutoAdvance = !userInitiated
-            startPlaying(track, indexUnchanged: true)
+            startPlaying(track)
             return
         }
         guard !activeQueue.isEmpty else { return }
@@ -697,8 +701,8 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Source resolution
 
-    private func startPlaying(_ track: Track, indexUnchanged: Bool = false,
-                              localLease: OfflinePlaybackLease? = nil) {
+    private func startPlaying(_ track: Track,
+                              localLease: OfflinePlaybackLease? = nil, resumeAt: TimeInterval = 0) {
         offlineScan?.cancel()
         offlineScan = nil
         offlineScanID = UUID()
@@ -709,7 +713,8 @@ final class PlayerService: ObservableObject {
         pendingAudioResourceLoader = nil
         scrobbleIfNeeded(completed: false)
         currentTrack = track
-        progress = 0
+        playbackAccountID = AccountStore.shared.profile?.userId
+        progress = resumeAt
         duration = track.duration
         servedQuality = nil
         unblockSource = nil
@@ -739,7 +744,7 @@ final class PlayerService: ObservableObject {
         persistState()
 
         Task {
-            await resolveAndLoad(track, generation: generation, localLease: localLease)
+            await resolveAndLoad(track, generation: generation, localLease: localLease, resumeAt: resumeAt)
         }
         Task {
             await loadLyrics(for: track, generation: generation)
@@ -818,9 +823,9 @@ final class PlayerService: ObservableObject {
 
         var data: SongURLData?
         do {
-            data = try await NeteaseAPI.songURL(ids: [track.id], level: quality).first
+            data = try await MusicAPI.songURL(ids: [track.id], level: quality).first
             if data?.url == nil, quality != AudioQuality.standard.rawValue {
-                data = try await NeteaseAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+                data = try await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
             }
         } catch {
             guard generation == resolveGeneration else { return }
@@ -847,7 +852,7 @@ final class PlayerService: ObservableObject {
             resolvedURL = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
 
-        // NetEase refused — try third-party sources (UnblockNeteaseMusic-style).
+        // The service refused — try third-party sources (unblock-style).
         if resolvedURL == nil || data?.freeTrialInfo != nil, allowsUnblock {
             if await resolveAndLoadUnblocked(track, generation: generation, resumeAt: resumeAt) { return }
         }
@@ -954,15 +959,15 @@ final class PlayerService: ObservableObject {
         generation: Int,
         resumeAt: TimeInterval = 0
     ) async -> ResolvedURLLoadResult {
-        // Skip a CDN host that just failed to connect (see NeteaseCDNHost).
-        let remote = NeteaseCDNHost.preferred(for: url)
+        // Skip a CDN host that just failed to connect (see CDNHost).
+        let remote = CDNHost.preferred(for: url)
 
         var asset = AVURLAsset(url: remote)
         var resourceLoader: CachingAudioResourceLoader?
         if SettingsManager.shared.enableAudioCache, !isTrial {
             let cacheLimitMB = await SettingsManager.shared.effectiveAudioCacheSizeMB()
             guard generation == resolveGeneration else { return .superseded }
-            let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .netease
+            let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .origin
             do {
                 let loader = try CachingAudioResourceLoader(
                     remoteURL: remote,
@@ -1192,7 +1197,7 @@ final class PlayerService: ObservableObject {
         consecutiveFailures = 0
     }
 
-    /// A NetEase stream or a cached file failed. The song gets one reload,
+    /// An upstream stream or a cached file failed. The song gets one reload,
     /// resuming where it stopped: on the CDN twin when the host could not be
     /// reached (the caching loader already swaps hosts itself, so this covers
     /// streams that bypass it), otherwise from a freshly resolved URL, since a
@@ -1235,7 +1240,7 @@ final class PlayerService: ObservableObject {
         }
         itemRetryGeneration = generation
         let twin = remoteURL.flatMap { url in
-            error.flatMap { NeteaseCDNHost.failover(from: url, after: $0) }
+            error.flatMap { CDNHost.failover(from: url, after: $0) }
         }
         // No network at all: the downloaded copy is the only way on.
         if twin == nil, connectivity, usesOfflineQueue {
@@ -1306,7 +1311,7 @@ final class PlayerService: ObservableObject {
             updateLyricsCursor(at: progress)
         }
         guard !usesOfflineQueue else { return }
-        let response = try? await NeteaseAPI.lyric(id: track.id)
+        let response = try? await MusicAPI.lyric(id: track.id)
         guard generation == resolveGeneration, let response else { return }
         lyrics = LyricsParser.parse(response)
         updateLyricsCursor(at: progress)
@@ -1539,7 +1544,7 @@ final class PlayerService: ObservableObject {
         let trackID = track.id
         let sourceID = source.sourceID
         Task.detached {
-            await NeteaseAPI.scrobbleStart(trackID: trackID, sourceID: sourceID)
+            await MusicAPI.scrobbleStart(trackID: trackID, sourceID: sourceID)
         }
     }
 
@@ -1549,14 +1554,15 @@ final class PlayerService: ObservableObject {
         let seconds = completed ? Int(duration) : Int(progress)
         let sourceID = source.sourceID
         Task.detached {
-            await NeteaseAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
+            await MusicAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
         }
     }
 
     // MARK: - Shuffle helpers
 
     private func reshuffle(keeping first: Track) {
-        var rest = queue.filter { $0.id != first.id }
+        var rest = queue
+        if let index = rest.firstIndex(where: { $0.id == first.id }) { rest.remove(at: index) }
         rest.shuffle()
         shuffledQueue = [first] + rest
     }
@@ -1596,76 +1602,115 @@ final class PlayerService: ObservableObject {
         case .fm:
             return nil
         case .album:
-            return (try await NeteaseAPI.album(id: context.id).songs, .album(context.id))
+            return (try await MusicAPI.album(id: context.id).songs, .album(context.id))
         case .artist:
-            return (try await NeteaseAPI.artist(id: context.id).hotSongs, .artist(context.id))
+            return (try await MusicAPI.artist(id: context.id).hotSongs, .artist(context.id))
         case .daily:
-            return (try await NeteaseAPI.dailyRecommendSongs(), .daily)
+            return (try await MusicAPI.dailyRecommendSongs(), .daily)
         case .cloud:
-            let songs = try await NeteaseAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
+            let songs = try await MusicAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
             return (songs, .cloud)
         case .recents:
             guard let uid = AccountStore.shared.profile?.userId else { return nil }
-            return (try await NeteaseAPI.playRecords(uid: uid, week: false).map(\.song), .none)
+            return (try await MusicAPI.playRecords(uid: uid, week: false).map(\.song), .none)
         case .heartbeat:
             // Regenerated from a fresh seed, the same way the Home card does it.
             guard let liked = AccountStore.shared.likedSongsPlaylist,
                   let seed = AccountStore.shared.likedTrackIDs.randomElement() else { return nil }
-            let tracks = try await NeteaseAPI.intelligenceList(songID: seed, playlistID: liked.id)
+            let tracks = try await MusicAPI.intelligenceList(songID: seed, playlistID: liked.id)
             return (tracks, .playlist(liked.id))
         case .playlist:
-            let response = try await NeteaseAPI.playlistDetail(id: context.id)
+            let response = try await MusicAPI.playlistDetail(id: context.id)
             var tracks = response.playlist.tracks
             // /v6/playlist/detail only carries the first page of tracks.
             let remaining = response.playlist.trackIds.map(\.id).dropFirst(tracks.count)
             for chunk in stride(from: 0, to: remaining.count, by: 500)
                 .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-                guard let more = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
+                guard let more = try? await MusicAPI.songDetails(ids: chunk) else { break }
                 tracks += more.songs
             }
             return (tracks, .playlist(context.id))
         }
     }
 
-    private struct PersistedState: Codable {
-        var queue: [Track]
-        var currentID: Int?
-        var repeatMode: String
-        var shuffle: Bool
-        /// Optional so state files written before recents existed still decode.
-        var recentContexts: [PlayContext]?
+    var playbackSession: PlaybackSession? {
+        guard let currentTrack else { return nil }
+        return PlaybackSession(accountID: playbackAccountID, queue: queue, orderedQueue: activeQueue,
+                               currentIndex: currentIndex, currentTrack: currentTrack, playNext: playNextList,
+                               source: source, repeatMode: repeatMode.rawValue, shuffled: shuffleEnabled,
+                               automaticOrder: false, isFM: isFMMode, progress: progress)
+    }
+
+    func resume(_ session: PlaybackSession) throws {
+        let accountID = AccountStore.shared.authenticatedAccountID
+        try session.validateAccess(accountID: accountID)
+        scrobbleIfNeeded(completed: false)
+        pause()
+        applyPlaybackSession(session)
+        startPlaying(session.currentTrack, resumeAt: session.progress)
+    }
+
+    private func applyPlaybackSession(_ session: PlaybackSession) {
+        // Materialize a Mac AutoMix order on iOS, which has no AutoMix engine.
+        queue = session.automaticOrder ? session.orderedQueue : session.queue
+        shuffledQueue = session.shuffled ? session.orderedQueue : []
+        shuffleEnabled = session.shuffled
+        currentIndex = session.currentIndex
+        currentTrack = session.currentTrack
+        playbackAccountID = session.accountID
+        playNextList = session.playNext
+        source = session.source
+        if let mode = RepeatMode(rawValue: session.repeatMode) { repeatMode = mode }
+        isFMMode = session.isFM
+        fmUpcoming = []
+        progress = session.progress
+        duration = session.currentTrack.duration
+        scrobbled = true
+    }
+
+    func checkpointPlayback() { persistState() }
+
+    func suspendForAccountChange() {
+        resolveGeneration += 1
+        scrobbled = true
+        pause()
+        pendingAudioResourceLoader?.cancel()
+        pendingAudioResourceLoader = nil
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        engine.replaceCurrentItem(with: nil)
+        releaseCurrentPlaybackResources()
     }
 
     private func persistState() {
-        let state = PersistedState(
-            queue: Array(queue.prefix(1000)),
-            currentID: currentTrack?.id,
-            repeatMode: repeatMode.rawValue,
-            shuffle: shuffleEnabled,
-            recentContexts: recentContexts
-        )
-        guard let data = try? JSONEncoder().encode(state) else { return }
-        let url = Self.stateFileURL
-        Task.detached {
-            try? data.write(to: url, options: .atomic)
-        }
+        lastPlaybackCheckpoint = .now
+        let state = PlaybackState(session: playbackSession, recentContexts: recentContexts)
+        PlaybackStateStorage.save(state, to: Self.stateFileURL)
     }
 
     private func restoreState() {
         guard let data = try? Data(contentsOf: Self.stateFileURL),
-              let state = try? JSONDecoder().decode(PersistedState.self, from: data)
+              let state = try? JSONDecoder().decode(PlaybackState.self, from: data)
         else { return }
         // Recents outlive the queue: restore them before bailing out on an
         // empty queue, or the next played track persists an empty list over
         // them and the Dock menu loses its history for good.
         recentContexts = Array((state.recentContexts ?? []).prefix(Self.recentContextsLimit))
-        guard !state.queue.isEmpty else { return }
-        queue = state.queue
-        shuffleEnabled = state.shuffle
+        if let session = state.session {
+            do {
+                try session.validate()
+                applyPlaybackSession(session)
+                NowPlayingManager.shared.updateMetadata(for: session.currentTrack, duration: duration)
+            } catch { ToastCenter.shared.show(error.localizedDescription) }
+            return
+        }
+        guard let legacy = state.legacy, !legacy.queue.isEmpty else { return }
+        queue = legacy.queue
+        shuffleEnabled = legacy.shuffle
         if shuffleEnabled {
             shuffledQueue = queue.shuffled()
         }
-        if let id = state.currentID,
+        if let id = legacy.currentID,
            let idx = activeQueue.firstIndex(where: { $0.id == id }) {
             currentIndex = idx
             currentTrack = activeQueue[idx]

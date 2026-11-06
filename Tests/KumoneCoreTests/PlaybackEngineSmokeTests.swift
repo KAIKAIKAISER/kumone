@@ -93,9 +93,33 @@ enum Fixtures {
     static let loudThenSilentStereoCAF: URL =
         try! writeSineCAF(seconds: 8, channels: 2, silentAfter: 4, name: "loud-silent-stereo")
 
+    /// 12 s 44.1 kHz stereo **ramp**: frame i carries (i + 1)·1e-7 on both
+    /// channels, so a sample read off the engine's output says which frame of
+    /// the file it is. `.file` deck path (stereo at the graph rate).
+    static let rampRate: Double = 44_100
+    static let rampStereoCAF: URL = try! writeRampCAF(seconds: 12, name: "ramp-stereo")
+
+    static func writeRampCAF(seconds: Double, name: String) throws -> URL {
+        try writeCAF(seconds: seconds, sampleRate: rampRate, channels: 2, name: name) {
+            Float($0 + 1) * 1e-7
+        }
+    }
+
     static func writeSineCAF(seconds: Double, sampleRate: Double = 44_100,
                              channels: AVAudioChannelCount = 1,
                              silentAfter: Double? = nil, name: String) throws -> URL {
+        let lastLoudFrame = silentAfter.map { Int($0 * sampleRate) } ?? Int.max
+        return try writeCAF(seconds: seconds, sampleRate: sampleRate, channels: channels,
+                            name: name) { frame in
+            frame < lastLoudFrame
+                ? 0.25 * sinf(2 * .pi * 440 * Float(frame) / Float(sampleRate))
+                : 0
+        }
+    }
+
+    /// Every channel carries `sample(frame)`. Cached by name.
+    static func writeCAF(seconds: Double, sampleRate: Double, channels: AVAudioChannelCount,
+                         name: String, sample: (Int) -> Float) throws -> URL {
         let url = dir.appendingPathComponent("\(name).caf")
         if FileManager.default.fileExists(atPath: url.path) { return url }
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channels)!
@@ -105,16 +129,11 @@ enum Fixtures {
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrames)!
         var frame = 0
         let total = Int(seconds * sampleRate)
-        let lastLoudFrame = silentAfter.map { Int($0 * sampleRate) } ?? total
         while frame < total {
             let n = min(Int(chunkFrames), total - frame)
             for channel in 0..<Int(channels) {
                 let data = buffer.floatChannelData![channel]
-                for i in 0..<n {
-                    data[i] = frame + i < lastLoudFrame
-                        ? 0.25 * sinf(2 * .pi * 440 * Float(frame + i) / Float(sampleRate))
-                        : 0
-                }
+                for i in 0..<n { data[i] = sample(frame + i) }
             }
             buffer.frameLength = AVAudioFrameCount(n)
             try file.write(from: buffer)
@@ -520,6 +539,167 @@ struct PlaybackEngineSmokeTests {
                 "position must advance after resume (\(o.pausedB) → \(o.resumed))")
     }
 
+    // (b2) **A resume must not cut a hole into the sound, must pick the song
+    // up where it stopped, and must leave the playhead on what is heard**
+    // (#136).
+    //
+    // Measured on the engine's real output (`setOutputSampleSink`, behind the
+    // limiter and the user volume) with a ramp-coded fixture: file frame i
+    // carries (i + 1)·1e-7, so every output sample says which frame of the
+    // file it is. One assertion per way this has been wrong — a hole after
+    // the restart, the song skipping ahead, the playhead drifting off the
+    // audio; the measurements are in `PlaybackEngine.pause()`. Silence at the
+    // pause itself is the pause, so the hole check starts at the first
+    // sounding frame after each resume.
+    @Test func resumeIsContinuousAndThePlayheadTracksTheOutput() async throws {
+        guard await audioOutputAvailable.value else { return }
+        final class Capture: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [Float] = []
+            private(set) var rate: Double = 0
+            func append(_ buffer: AVAudioPCMBuffer) {
+                guard let data = buffer.floatChannelData else { return }
+                lock.lock(); defer { lock.unlock() }
+                rate = buffer.format.sampleRate
+                values.append(contentsOf: UnsafeBufferPointer(start: data[0],
+                                                              count: Int(buffer.frameLength)))
+            }
+            func snapshot() -> (values: [Float], rate: Double) {
+                lock.lock(); defer { lock.unlock() }
+                return (values, rate)
+            }
+            var count: Int { lock.lock(); defer { lock.unlock() }; return values.count }
+        }
+        struct Outcome {
+            var pcm: [Float] = []; var rate: Double = 0
+            var marks: [(pause: Int, resume: Int)] = []
+            /// (position, output frame count) read together, three at a time,
+            /// before the first pause and after every resume.
+            var pairs: [[(position: TimeInterval, frames: Int)]] = []
+        }
+        let cycles = 3
+        let fileRate = Fixtures.rampRate
+        let result = await withWatchdog("resumeContinuity", timeout: 40) { () -> Outcome in
+            var o = Outcome()
+            let engine = PlaybackEngine()
+            _ = EventLog(engine)
+            let capture = Capture()
+            defer { engine.setOutputSampleSink(nil); engine.stopAll() }
+            guard (try? engine.loadFile(at: Fixtures.rampStereoCAF, on: .a)) != nil else { return o }
+            // The ramp is a slow DC sweep; at 1 % it is −65 dBFS at its peak.
+            engine.outputVolume = 0.01
+            engine.setOutputSampleSink { capture.append($0) }
+            // Pair a position with the output it belongs to: wait for a fresh
+            // delivery, then read both. Tap buffers are ~0.1 s, so an unpaired
+            // read would jitter by that much.
+            func pairs() -> [(TimeInterval, Int)] { (0..<3).map { _ in pair() } }
+            func pair() -> (TimeInterval, Int) {
+                let seen = capture.count
+                let deadline = Date().addingTimeInterval(1)
+                while capture.count == seen, Date() < deadline { Thread.sleep(forTimeInterval: 0.0005) }
+                let position = engine.position(of: .a)
+                return (position, capture.count)
+            }
+            engine.play(deck: .a, from: 0)
+            _ = pollPosition(engine, deck: .a, past: 1.0, timeout: 5)
+            o.pairs.append(pairs())
+            for _ in 0..<cycles {
+                let pauseMark = capture.count
+                engine.pause()
+                // Well past the drain, so the engine really freezes.
+                Thread.sleep(forTimeInterval: 0.7)
+                o.marks.append((pauseMark, capture.count))
+                engine.resume()
+                Thread.sleep(forTimeInterval: 0.9)
+                o.pairs.append(pairs())
+            }
+            (o.pcm, o.rate) = capture.snapshot()
+            return o
+        }
+        guard let o = result else { return }
+        guard o.rate > 0, o.marks.count == cycles, let firstPair = o.pairs.first?.first,
+              firstPair.frames > 24_000 else {
+            Issue.record("no output PCM was captured (rate \(o.rate), \(o.marks.count) cycles)")
+            return
+        }
+        let pcm = o.pcm
+        // The ramp's slope per output frame, from steady playback before the
+        // first pause: a long window, so resampling ripple averages out.
+        let hi = firstPair.frames - 1, lo = hi - 12_000
+        let step = Double(pcm[hi] - pcm[lo]) / Double(hi - lo)
+        guard step > 0 else { Issue.record("the ramp fixture did not reach the output"); return }
+        /// Seconds of the file the output sample `i` is carrying.
+        func content(_ i: Int) -> TimeInterval {
+            (Double(pcm[i]) / (step * o.rate / fileRate) - 1) / fileRate
+        }
+        /// A frame on the ramp proper — not silence, not a filter's settling
+        /// after a start or a stop.
+        func steady(_ i: Int) -> Bool {
+            guard i > 0, i + 1 < pcm.count else { return false }
+            let a = Double(pcm[i] - pcm[i - 1]) / step, b = Double(pcm[i + 1] - pcm[i]) / step
+            return pcm[i] > 0 && abs(a - 1) < 0.5 && abs(b - 1) < 0.5
+        }
+        func lead(_ p: (position: TimeInterval, frames: Int)) -> TimeInterval? {
+            guard let i = stride(from: p.frames - 1, to: max(0, p.frames - 4_800), by: -1)
+                .first(where: steady) else { return nil }
+            return p.position - (content(i) + Double(p.frames - 1 - i) / o.rate)
+        }
+        let silence: Float = 1e-9
+        let maxRun = Int(o.rate * 0.001)
+        for (k, mark) in o.marks.enumerated() {
+            let end = k + 1 < o.marks.count ? o.marks[k + 1].pause : pcm.count
+            guard let first = (mark.resume..<end).first(where: { pcm[$0] > silence }),
+                  (first..<end).contains(where: steady) else {
+                Issue.record("resume \(k): the deck never sounded again, or the ramp is unreadable")
+                continue
+            }
+            var run = 0, worst = 0
+            for i in first..<end {
+                run = pcm[i] > silence ? 0 : run + 1
+                worst = max(worst, run)
+            }
+            #expect(worst <= maxRun, """
+                resume \(k): \(String(format: "%.2f", 1000 * Double(worst) / o.rate)) ms of \
+                digital silence inside resumed sound
+                """)
+            // Walk the ramp from just before the pause to the next one. Where
+            // steady frames are adjacent the song must advance by exactly one
+            // output frame; where something interrupts them (the pause, a
+            // filter settling after the start) it may come back a little
+            // early — the replay — but never skip ahead.
+            var previous: Int?
+            var skips: [String] = []
+            for i in max(1, mark.pause - 4_800)..<end where steady(i) {
+                defer { previous = i }
+                guard let p = previous else { continue }
+                if i == p + 1 {
+                    let step = content(i) - content(p) - 1 / o.rate
+                    if abs(step) > 0.002 { skips.append(String(format: "%+.1f ms", 1000 * step)) }
+                } else {
+                    let jump = content(i) - content(p)
+                    if !(jump > -0.04 && jump < 0.01) {
+                        skips.append(String(format: "%+.1f ms across %d frames", 1000 * jump, i - p))
+                    }
+                }
+            }
+            #expect(skips.isEmpty, "resume \(k): the song jumped: \(skips.prefix(4))")
+        }
+        // The median of three paired reads: one read can still land a few ms
+        // either side of the delivery it was paired with.
+        let leads: [TimeInterval?] = o.pairs.map { reads in
+            let values = reads.compactMap(lead).sorted()
+            return values.count == reads.count ? values[values.count / 2] : nil
+        }
+        let shown = leads.map { $0.map { String(format: "%+.4f", $0) } ?? "nil" }.joined(separator: " ")
+        print("resumeContinuity: position − heard content, before and after each pause: \(shown)")
+        guard let base = leads.first ?? nil, !leads.contains(where: { $0 == nil }) else {
+            Issue.record("a position/output pair could not be read (\(shown))")
+            return
+        }
+        let moved = leads.compactMap { $0 }.map { abs($0 - base) }.max() ?? 0
+        #expect(moved < 0.02, "the playhead moved \(moved) s off the output over \(cycles) pauses (\(shown))")
+    }
+
     // (c) Progressive streaming from a local HTTP server: position advances,
     // download completes, and the .part mirror matches the fixture bytes.
     @Test func streamingPlaybackAndPartFile() async throws {
@@ -658,11 +838,16 @@ struct PlaybackEngineSmokeTests {
             let engine = PlaybackEngine()
             let log = EventLog(engine)
             defer { engine.stopAll() }
-            guard (try? engine.loadFile(at: Fixtures.eightSecondCAF, on: .a)) != nil,
-                  (try? engine.loadFile(at: Fixtures.sixSecondCAF, on: .b)) != nil else { return o }
+            guard let duration = try? engine.loadFile(at: Fixtures.eightSecondCAF, on: .a)
+            else { return o }
             engine.outputVolume = 0
-            // Start A near its tail so the hand-over happens within ~3s.
+            // B is not prepared until A enters the ordinary gapless window.
             engine.play(deck: .a, from: 5)
+            let deadline = Date().addingTimeInterval(5)
+            while !PlayerService.gaplessPrefetchReady(position: engine.position(of: .a), duration: duration),
+                  Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            guard PlayerService.gaplessPrefetchReady(position: engine.position(of: .a), duration: duration),
+                  (try? engine.loadFile(at: Fixtures.sixSecondCAF, on: .b)) != nil else { return o }
             engine.scheduleTransition(.plain(.gapless), from: .a, to: .b)
 
             o.completed = log.wait(timeout: 10) {
@@ -683,6 +868,36 @@ struct PlaybackEngineSmokeTests {
         #expect(o.completed, ".transitionCompleted(a→b) should be emitted")
         #expect(o.bPosLate > o.bPosEarly + 0.5,
                 "deck B position should advance after the hand-over (\(o.bPosEarly) → \(o.bPosLate))")
+    }
+
+    @Test func withdrawingPreparationPreservesAnUnconsumedHandOver() async throws {
+        guard await audioOutputAvailable.value else { return }
+        let result = await withWatchdog("withdrawPreparation", timeout: 20) {
+            let engine = PlaybackEngine()
+            defer { engine.stopAll() }
+            engine.outputVolume = 0
+            guard (try? engine.loadFile(at: Fixtures.sixSecondStereoCAF, on: .a)) != nil,
+                  (try? engine.loadFile(at: Fixtures.sixSecondStereoCAF, on: .b)) != nil
+            else { return (false, true, true, false) }
+            // Do not consume engine.events: the main actor can still hold the
+            // outgoing deck while midpoint/completed wait in the event stream.
+            engine.play(deck: .a, from: 4)
+            engine.scheduleTransition(.plain(.crossfade(duration: 1, outPoint: 5, inPoint: 0)),
+                                      from: .a, to: .b)
+            let deadline = Date().addingTimeInterval(12)
+            while !engine.handOverStarted, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            let started = engine.handOverStarted
+            let discardedDuring = engine.discardPreparedDeck(.b)
+            while engine.hasPendingTransition, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            let discardedAfter = engine.discardPreparedDeck(.b)
+            let playing = engine.position(of: .b) > 0 && engine.duration(of: .b) != nil
+            return (started, discardedDuring, discardedAfter, playing)
+        }
+        guard let (started, discardedDuring, discardedAfter, playing) = result else { return }
+        #expect(started)
+        #expect(!discardedDuring)
+        #expect(!discardedAfter)
+        #expect(playing)
     }
 
     // (f) TransitionStyle execution. Each style runs a real A → B overlap and
@@ -1317,11 +1532,12 @@ struct PlaybackEngineSmokeTests {
             let nominal = samples.filter { $0.t < completedAt - 1.8 }.map(\.peak).max() ?? 0
             #expect(nominal > 0.05, "\(name): deck A should be sounding before the overlap (peak \(nominal))")
 
-            // The level the style had already brought deck A down to, taken
-            // over the last 150 ms before the reset. Everything after the
-            // reset has to stay at or below it: the outgoing deck may keep
-            // decaying (an `.echoOut` tail does), it may never come back up.
-            let before = samples.filter { $0.t > completedAt - 0.15 && $0.t <= completedAt }
+            // Compare against the pre-reset envelope. This crossfade uses the
+            // default echo delay: sample a full repeat so a trough in the last
+            // 150 ms cannot make the next decaying echo look like resurrection.
+            let baselineDuration = planned.style.outroEffect == .echoOut
+                ? TransitionAutomation.echoDefaultDelayTime : 0.15
+            let before = samples.filter { $0.t > completedAt - baselineDuration && $0.t <= completedAt }
             let ceiling = max((before.map(\.peak).max() ?? 0) * 1.5, nominal * 0.02)
             // One render buffer of grace: the mixer smooths a gain change over
             // a few ms, so the very first buffer may still be crossing down.
