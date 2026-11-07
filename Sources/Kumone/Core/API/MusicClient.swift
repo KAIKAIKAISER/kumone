@@ -68,6 +68,17 @@ final class MusicClient: @unchecked Sendable {
         return id
     }
 
+    private static var requestCounter: UInt32 = 0
+    private static let requestCounterLock = NSLock()
+
+    private static func generateRequestID(at time: TimeInterval) -> String {
+        requestCounterLock.lock()
+        requestCounter &+= 1
+        let seq = requestCounter
+        requestCounterLock.unlock()
+        return String(format: "%lld_%04d_%04d", Int64(time * 1000), Int(time * 1_000_000) % 1000, seq % 10000)
+    }
+
     private let session: URLSession
     private let cookieLock = NSLock()
     // Serialize mutations and disk snapshots without blocking cookie readers.
@@ -289,7 +300,7 @@ final class MusicClient: @unchecked Sendable {
             "buildver": String(Int(now)),
             "resolution": "1920x1080",
             "channel": Self.eapiChannel,
-            "requestId": String(format: "%lld_%04d", Int64(now * 1000), Int(now * 1_000_000) % 1000),
+            "requestId": Self.generateRequestID(at: now),
             "__csrf": cookie(named: "__csrf") ?? "",
         ]
         if let musicU = cookie(named: "MUSIC_U") { header["MUSIC_U"] = musicU }

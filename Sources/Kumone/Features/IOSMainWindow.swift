@@ -6,7 +6,6 @@ public struct IOSMainWindow: View {
     @StateObject private var account = AccountStore.shared
     @StateObject private var settings = SettingsManager.shared
     @StateObject private var toasts = ToastCenter.shared
-    @StateObject private var updater = IOSUpdater.shared
     @StateObject private var artworkStore = NowPlayingArtworkStore()
     @Namespace private var nowPlayingTransition
     @Environment(\.colorScheme) private var systemColorScheme
@@ -58,9 +57,6 @@ public struct IOSMainWindow: View {
             .task {
                 await DownloadManager.shared.start()
                 await account.bootstrap()
-                if settings.autoCheckUpdates, DistributionChannel.current.allowsSelfUpdate {
-                    IOSUpdater.shared.check(interactive: false)
-                }
             }
             .onChange(of: scenePhase) { phase in
                 guard phase == .active else { return }
@@ -73,9 +69,6 @@ public struct IOSMainWindow: View {
             }
             .task(id: settings.showMainWindowAmbientBackground) {
                 artworkStore.setArtworkNeeded(settings.showMainWindowAmbientBackground)
-            }
-            .sheet(isPresented: $updater.showSheet) {
-                IOSUpdaterSheet()
             }
             .sheet(isPresented: $showLogin) {
                 LoginSheet()

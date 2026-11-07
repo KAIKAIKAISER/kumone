@@ -1066,6 +1066,38 @@ final class PlayerService: ObservableObject {
         let durationMS: Int?
     }
 
+    private func qualityLadder(startingAt desired: AudioQuality) -> [AudioQuality] {
+        switch desired {
+        case .hires:
+            return [.hires, .lossless, .exhigh, .higher, .standard]
+        case .lossless:
+            return [.lossless, .exhigh, .higher, .standard]
+        case .exhigh:
+            return [.exhigh, .higher, .standard]
+        case .higher:
+            return [.higher, .standard]
+        case .standard:
+            return [.standard]
+        }
+    }
+
+    private func fetchNetEaseSongURL(trackID: Int, level: String) async -> SongURLData? {
+        do {
+            if let item = try await MusicAPI.songURL(ids: [trackID], level: level).first {
+                return item
+            }
+        } catch MusicAPIError.needLogin {
+            await MusicAPI.refreshLogin()
+            return try? await MusicAPI.songURL(ids: [trackID], level: level).first
+        } catch {
+            // Transient error (network glitch, concurrent request collision): retry once after 250ms
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return nil }
+            return try? await MusicAPI.songURL(ids: [trackID], level: level).first
+        }
+        return nil
+    }
+
     /// The full URL-resolution chain (quality fallback → https upgrade →
     /// unblock rescue) plus cache-key derivation — shared by playback and
     /// prefetch so both always derive identical keys. Pure: no toasts, no
@@ -1084,23 +1116,37 @@ final class PlayerService: ObservableObject {
                 durationMS: track.durationMS > 0 ? track.durationMS : nil
             )
         }
-        let quality = SettingsManager.shared.audioQuality.rawValue
+        let requestedQuality = SettingsManager.shared.audioQuality
         guard !Task.isCancelled else { return nil }
-        var data = try? await MusicAPI.songURL(ids: [track.id], level: quality).first
-        guard !Task.isCancelled else { return nil }
-        if data?.url == nil, quality != AudioQuality.standard.rawValue {
-            data = try? await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+
+        let ladder = qualityLadder(startingAt: requestedQuality)
+        var bestData: SongURLData?
+        var trialData: SongURLData?
+
+        for q in ladder {
+            guard !Task.isCancelled else { return nil }
+            guard let item = await fetchNetEaseSongURL(trackID: track.id, level: q.rawValue),
+                  let rawURL = item.url, !rawURL.isEmpty else {
+                continue
+            }
+            if item.freeTrialInfo == nil {
+                bestData = item
+                break
+            } else if trialData == nil {
+                trialData = item
+            }
         }
-        guard !Task.isCancelled else { return nil }
+
+        var data = bestData
         var url: URL?
         var unblock: String?
         if let urlString = data?.url {
             url = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
-        // The service refused — try third-party sources (unblock-style).
-        // #104 made the source list configurable; resolve through the enabled
-        // sources (single-shot here, so nothing is excluded).
-        if url == nil || data?.freeTrialInfo != nil, SettingsManager.shared.enableUnblock {
+
+        // If official service didn't yield a full, non-trial stream, try third-party sources (unblock-style).
+        // #104 made the source list configurable; resolve through the enabled sources.
+        if url == nil, SettingsManager.shared.enableUnblock {
             let resolution = await UnblockService.resolve(
                 track,
                 enabledSources: SettingsManager.shared.enabledAudioSourceIDs,
@@ -1112,11 +1158,18 @@ final class PlayerService: ObservableObject {
                 data = nil
             }
         }
+
+        // If unblock failed or was disabled, but official source had a trial preview, fall back to it
+        if url == nil, let fallback = trialData, let urlString = fallback.url {
+            url = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
+            data = fallback
+        }
+
         guard !Task.isCancelled, let url else { return nil }
         let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension.lowercased()
         return ResolvedSource(
             url: url,
-            key: EngineAudioCache.Key(trackID: track.id, level: data?.level ?? quality,
+            key: EngineAudioCache.Key(trackID: track.id, level: data?.level ?? requestedQuality.rawValue,
                                 source: unblock.map { "unblock:\($0)" } ?? Upstream.tag,
                                 fileExtension: ext),
             level: data?.level,

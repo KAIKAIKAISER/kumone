@@ -31,9 +31,6 @@ public struct KumoneApp: App {
                      height: Theme.Layout.defaultWindowHeight)
         .windowResizability(.contentMinSize)
         .commands {
-            CommandGroup(after: .appInfo) {
-                CheckForUpdatesButton()
-            }
 
             CommandGroup(before: .toolbar) {
                 SidebarCommandButton()

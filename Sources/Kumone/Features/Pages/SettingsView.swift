@@ -194,27 +194,6 @@ struct SettingsView: View {
                 }
             }
 
-            if showsUpdateControls {
-                Section("更新") {
-                    Toggle("启动时自动检查更新", isOn: $settings.autoCheckUpdates)
-                    Text("关闭后启动不再自动弹出更新提示，仍可手动检查更新")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    #if os(iOS)
-                    if DistributionChannel.current == .sideload {
-                        Button {
-                            IOSUpdater.shared.check(interactive: true)
-                        } label: {
-                            Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        Text("装有 TrollStore（巨魔）可在应用内一键自动安装；否则可下载 IPA 用侧载工具重装（登录状态与设置保留）")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    #endif
-                }
-            }
-
             Section {
                 VStack(spacing: 2) {
                     Text("Kumone")
@@ -266,14 +245,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Sparkle on macOS; on iOS only sideload builds carry an updater.
-    private var showsUpdateControls: Bool {
-        #if os(iOS)
-        return DistributionChannel.current.allowsSelfUpdate
-        #else
-        return true
-        #endif
-    }
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
