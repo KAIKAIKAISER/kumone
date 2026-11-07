@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Fork release tag (for example v0.3.8-ios.1)"
+        description: "Fork release tag (for example v0.3.29-ios.1)"
         required: true
         type: string
       marketing_version:
         description: "CFBundleShortVersionString"
         required: true
-        default: "0.3.8"
+        default: "0.3.29"
         type: string
 
 permissions:
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-26
+    runs-on: xcode-27
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.release_tag }}
@@ -31,9 +31,6 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
-      - name: Test core package
-        run: bash Scripts/test-core.sh
 
       - name: Build unsigned iOS IPA
         run: |

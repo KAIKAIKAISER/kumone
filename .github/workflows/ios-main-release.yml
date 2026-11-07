@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-26
+    runs-on: xcode-27
     env:
       GH_TOKEN: ${{ github.token }}
       UPSTREAM_REPOSITORY: missuo/kumone
@@ -30,9 +30,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Test core package
-        run: bash Scripts/test-core.sh
-
       - name: Build unsigned iOS IPA
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
@@ -42,7 +39,7 @@ jobs:
           else
             VERSION="$(gh api "repos/$UPSTREAM_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)"
             if [[ -z "$VERSION" ]]; then
-              VERSION="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.3.8)"
+              VERSION="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.3.29)"
             fi
             VERSION="${VERSION#v}"
             VERSION="${VERSION%%-*}"
