@@ -63,11 +63,16 @@ jobs:
         run: |
           NOTES="$RUNNER_TEMP/release-notes.md"
           {
-            echo "Unsigned iOS build from commit \`$(git rev-parse --short HEAD)\`."
+            echo "Unsigned iOS build from commit \`$(git rev-parse --short HEAD)\` (synced with upstream \`v0.3.32\`)."
             echo
-            echo "Includes synced lock-screen lyrics, local music-library playback, direct lyrics access from the mini player, QR-login fixes, and the corrected AppIcon."
+            echo "### What's Changed in this Release"
+            echo "- 🎚️ **iOS 音效与 10 段均衡器**：合入上游最新音频 DSP 引擎，提供原声、低音增强、高音增强、流行、摇滚、人声、古典、电子 8 种音效预设及 10 段图形均衡器调节。"
+            echo "- 🎵 **VIP 歌曲播放稳定性增强**：新增阶梯式多音质自适应回退（Hi-Res -> 无损 -> 极高 -> 较高 -> 标准）与瞬时失效自动重试机制，彻底解决 VIP 播放断断续续及并发锁冲突。"
+            echo "- 🚫 **移除检查更新菜单与弹窗**：去除应用内检查更新入口与自动弹窗，纯净离线体验。"
+            echo "- 📂 **本地音乐库与锁屏实时歌词**：支持 iOS 音乐库本地歌曲扫描播放，系统锁屏 / 灵动岛 / 播放控制台实时歌词同步滚动与进度拖拽同步。"
+            echo "- ⚡ **无损与 Hi-Res 下载校验修复**：合入上游针对网易云无损格式的 MD5 与长度校验补丁。"
             echo
-            echo "The IPA must be signed before installation."
+            echo "The IPA must be signed before installation (e.g. via TrollStore, AltStore, SideStore, or Apple Developer Certificate)."
           } > "$NOTES"
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
