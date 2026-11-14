@@ -10,7 +10,7 @@ on:
       marketing_version:
         description: "CFBundleShortVersionString"
         required: true
-        default: "0.3.29"
+        default: "0.3.35"
         type: string
 
 permissions:
@@ -63,14 +63,18 @@ jobs:
         run: |
           NOTES="$RUNNER_TEMP/release-notes.md"
           {
-            echo "Unsigned iOS build from commit \`$(git rev-parse --short HEAD)\` (synced with upstream \`v0.3.32\`)."
+            echo "Unsigned iOS build from commit \`$(git rev-parse --short HEAD)\` (synced with upstream \`v0.3.35\`)."
             echo
             echo "### What's Changed in this Release"
-            echo "- 🎚️ **iOS 音效与 10 段均衡器**：合入上游最新音频 DSP 引擎，提供原声、低音增强、高音增强、流行、摇滚、人声、古典、电子 8 种音效预设及 10 段图形均衡器调节。"
-            echo "- 🎵 **VIP 歌曲播放稳定性增强**：新增阶梯式多音质自适应回退（Hi-Res -> 无损 -> 极高 -> 较高 -> 标准）与瞬时失效自动重试机制，彻底解决 VIP 播放断断续续及并发锁冲突。"
+            echo "- 💬 **歌曲评论系统与手势滑动**：iPhone 正在播放界面歌词向左滑动直达歌曲评论（底部双圆点指示），支持滚动加载热门/最新评论与点赞互动，更多菜单亦可直接打开评论。"
+            echo "- 🔍 **iOS 全歌单内搜索与云盘增强**：所有歌单均支持歌单内搜索（下拉或点击放大镜），云盘取消 1000 首上限并支持全量搜索与播放。"
+            echo "- 🔑 **Cookie 备用登录**：支持在扫码/短信受阻时通过浏览器 Cookie (MUSIC_U) 安全登录。"
+            echo "- 🚫 **音乐黑名单与不感兴趣**：支持将单曲/歌手加入黑名单，每日推荐支持「不感兴趣」操作。"
+            echo "- 🛠️ **官方音源优先与播放重试**：合入上游网络超时自动重试机制与官方缓存优先策略；修复 iOS 16/17 播放页展开过渡。"
+            echo "- 🎚️ **iOS 音效与 10 段均衡器**：内置音频 DSP 处理引擎，提供 8 种预设与 10 段图形均衡器调节。"
+            echo "- 🎵 **VIP 歌曲播放稳定性增强**：阶梯式音质自适应回退（Hi-Res -> 无损 -> 极高 -> 较高 -> 标准）与瞬时重试机制，消除卡顿断音。"
             echo "- 🚫 **移除检查更新菜单与弹窗**：去除应用内检查更新入口与自动弹窗，纯净离线体验。"
-            echo "- 📂 **本地音乐库与锁屏实时歌词**：支持 iOS 音乐库本地歌曲扫描播放，系统锁屏 / 灵动岛 / 播放控制台实时歌词同步滚动与进度拖拽同步。"
-            echo "- ⚡ **无损与 Hi-Res 下载校验修复**：合入上游针对网易云无损格式的 MD5 与长度校验补丁。"
+            echo "- 📂 **本地音乐库与锁屏实时歌词**：支持本地歌曲扫描播放，系统锁屏 / 灵动岛 / 播放控制台实时歌词同步滚动与拖拽。"
             echo
             echo "The IPA must be signed before installation (e.g. via TrollStore, AltStore, SideStore, or Apple Developer Certificate)."
           } > "$NOTES"
