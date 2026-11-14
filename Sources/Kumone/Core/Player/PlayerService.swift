@@ -8,6 +8,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import OSLog
 
 enum RepeatMode: String, CaseIterable {
     case off, all, one
@@ -316,6 +317,10 @@ final class PlayerService: ObservableObject {
     /// arrive in either order (streamed first play, cache hit, hand-over).
     private var currentLyricLRC: String?
     private var consecutiveFailures = 0
+    /// Why the last playback URL request failed, when it failed in transit
+    /// or the service refused it, rather than answering with no URL.
+    private var lastResolveFailure: String?
+    private static let resolveLog = Logger(subsystem: "sb.moe.kumone", category: "playback")
     private var scrobbled = false
     private var startScrobbled = false
 
@@ -1083,17 +1088,17 @@ final class PlayerService: ObservableObject {
 
     private func fetchNetEaseSongURL(trackID: Int, level: String) async -> SongURLData? {
         do {
-            if let item = try await MusicAPI.songURL(ids: [trackID], level: level).first {
+            if let item = try await MusicAPI.songURLRetrying(ids: [trackID], level: level).first {
                 return item
             }
         } catch MusicAPIError.needLogin {
             await MusicAPI.refreshLogin()
-            return try? await MusicAPI.songURL(ids: [trackID], level: level).first
+            return try? await MusicAPI.songURLRetrying(ids: [trackID], level: level).first
         } catch {
-            // Transient error (network glitch, concurrent request collision): retry once after 250ms
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return nil }
-            return try? await MusicAPI.songURL(ids: [trackID], level: level).first
+            if !(error is CancellationError) {
+                lastResolveFailure = error.localizedDescription
+                Self.resolveLog.error("Playback URL for \(trackID) failed: \(String(describing: error))")
+            }
         }
         return nil
     }
@@ -1116,6 +1121,7 @@ final class PlayerService: ObservableObject {
                 durationMS: track.durationMS > 0 ? track.durationMS : nil
             )
         }
+        lastResolveFailure = nil
         let requestedQuality = SettingsManager.shared.audioQuality
         guard !Task.isCancelled else { return nil }
 
@@ -1211,9 +1217,9 @@ final class PlayerService: ObservableObject {
 
         guard let resolved else {
             consecutiveFailures += 1
-            let reason = track.playability(privilege: nil,
-                                           isLoggedIn: AccountStore.shared.isLoggedIn,
-                                           vipType: AccountStore.shared.vipType).reason
+            let reason = lastResolveFailure ?? track.playability(privilege: nil,
+                                                                 isLoggedIn: AccountStore.shared.isLoggedIn,
+                                                                 vipType: AccountStore.shared.vipType).reason
             ToastCenter.shared.show(String(localized: "《\(track.name)》无法播放\(reason.map { "：\($0)" } ?? "")"))
             guard isPlaying else { return }
             if consecutiveFailures < 5 {
@@ -3913,8 +3919,8 @@ final class PlayerService: ObservableObject {
             let songs = try await MusicAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
             return (songs, .cloud)
         case .recents:
-            guard let uid = AccountStore.shared.profile?.userId else { return nil }
-            return (try await MusicAPI.playRecords(uid: uid, week: false).map(\.song), .none)
+            guard AccountStore.shared.isLoggedIn else { return nil }
+            return (try await MusicAPI.recentSongs().map(\.song), .none)
         case .heartbeat:
             // Regenerated from a fresh seed, the same way the Home card does it.
             guard let liked = AccountStore.shared.likedSongsPlaylist,

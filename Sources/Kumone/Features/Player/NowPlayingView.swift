@@ -684,14 +684,16 @@ struct NowPlayingView: View {
                     #endif
                 } else {
                     #if os(iOS)
-                    IOSImmersiveLyricsColumn()
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(AppAnimation.standard) {
-                                showLyricsOnMobile = false
+                    NowPlayingLyricsPager(isShown: true, horizontalInset: 32) {
+                        IOSImmersiveLyricsColumn()
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation(AppAnimation.standard) {
+                                    showLyricsOnMobile = false
+                                }
                             }
-                        }
-                        .transition(.opacity.combined(with: .scale(scale: 1.05)))
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 1.05)))
                     #else
                     lyricsColumn
                         .contentShape(Rectangle())
@@ -726,6 +728,13 @@ struct NowPlayingView: View {
         return VStack(spacing: 20) {
             Spacer().frame(height: NowPlayingChromeMetrics.compactContentTopInset)
             if showLyricsOnMobile {
+                #if os(iOS)
+                NowPlayingLyricsPager(isShown: true, horizontalInset: 16) {
+                    lyricsColumn
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity)
+                #else
                 lyricsColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)
@@ -735,6 +744,7 @@ struct NowPlayingView: View {
                             setMobileLyricsVisible(false)
                         }
                     )
+                #endif
             } else {
                 VStack(spacing: 20) {
                     artworkButton(size: artworkDim)
@@ -794,7 +804,9 @@ struct NowPlayingView: View {
                     CompactQueueContent()
                         .transition(.opacity)
                 } else {
-                    IOSImmersiveLyricsColumn()
+                    NowPlayingLyricsPager(isShown: showLyricsOnMobile, horizontalInset: 32) {
+                        IOSImmersiveLyricsColumn()
+                    }
                         .opacity(showLyricsOnMobile ? 1 : 0)
                         .allowsHitTesting(showLyricsOnMobile)
                         .accessibilityHidden(!showLyricsOnMobile)
@@ -957,8 +969,10 @@ struct NowPlayingView: View {
                     .opacity(showLyricsOnMobile ? 0 : 1)
                     .allowsHitTesting(!showLyricsOnMobile)
 
-                IOSMinimalLyricsColumn {
-                    showLyricsOnMobile = false
+                NowPlayingLyricsPager(isShown: showLyricsOnMobile, horizontalInset: 32) {
+                    IOSMinimalLyricsColumn {
+                        showLyricsOnMobile = false
+                    }
                 }
                 .opacity(showLyricsOnMobile ? 1 : 0)
                 .allowsHitTesting(showLyricsOnMobile)
@@ -1807,6 +1821,7 @@ private struct CompactTrackHeader: View {
     @EnvironmentObject private var account: AccountStore
     @State private var showAddToPlaylist = false
     @State private var selectedArtist: ArtistRef?
+    @State private var commentsTrack: Track?
 
     let showsExpandedArtwork: Bool
     let onOpenDestination: (Destination) -> Void
@@ -1874,6 +1889,10 @@ private struct CompactTrackHeader: View {
 
                     Menu {
                         TrackDownloadActions(track: track, showsIcons: true)
+                        TrackBlacklistMenu(track: track, showsIcons: true)
+                        SongCommentsMenuButton(track: track, showsIcons: true) {
+                            commentsTrack = track
+                        }
                         Divider()
                         Button {
                             player.addToPlayNext(track)
@@ -1922,6 +1941,9 @@ private struct CompactTrackHeader: View {
                 AddToPlaylistSheet(track: track)
             }
         }
+        .sheet(item: $commentsTrack) { track in
+            SongCommentsView(track: track)
+        }
         .sheet(item: $selectedArtist) { artist in
             NavigationStack {
                 ArtistDetailView(artistID: artist.id)
@@ -1942,35 +1964,6 @@ private struct CompactTrackHeader: View {
                         #endif
                     }
             }
-        }
-    }
-
-    @ViewBuilder
-    private var artistEntry: some View {
-        let artists = player.currentTrack?.artists.filter { $0.id > 0 } ?? []
-        if artists.count == 1, let artist = artists.first {
-            Button(artist.name) {
-                selectedArtist = artist
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.8))
-            .accessibilityHint("查看歌手主页")
-        } else if artists.count > 1 {
-            Menu {
-                ForEach(artists) { artist in
-                    Button(artist.name) {
-                        selectedArtist = artist
-                    }
-                }
-            } label: {
-                Text(artists.map(\.name).joined(separator: " / "))
-                    .lineLimit(1)
-                    .foregroundStyle(.white.opacity(0.8))
-            }
-        } else {
-            Text(player.currentTrack?.artistNames ?? "")
-                .lineLimit(1)
-                .foregroundStyle(.white.opacity(0.62))
         }
     }
 }
@@ -2556,6 +2549,7 @@ private struct MinimalTrackInfoRow: View {
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @State private var showAddToPlaylist = false
+    @State private var commentsTrack: Track?
     @State private var airPlayRequest = 0
     let onOpenDestination: (Destination) -> Void
     let onOpenSoundEffects: () -> Void
@@ -2603,6 +2597,9 @@ private struct MinimalTrackInfoRow: View {
             if let track = player.currentTrack {
                 AddToPlaylistSheet(track: track)
             }
+        }
+        .sheet(item: $commentsTrack) { track in
+            SongCommentsView(track: track)
         }
     }
 
@@ -2652,6 +2649,10 @@ private struct MinimalTrackInfoRow: View {
     private func moreMenu(for track: Track) -> some View {
         Menu {
             TrackDownloadActions(track: track, showsIcons: true)
+            TrackBlacklistMenu(track: track, showsIcons: true)
+            SongCommentsMenuButton(track: track, showsIcons: true) {
+                commentsTrack = track
+            }
             Divider()
             Button {
                 airPlayRequest += 1
