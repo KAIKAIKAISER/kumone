@@ -2,6 +2,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import OSLog
 
 enum RepeatMode: String, CaseIterable {
     case off, all, one
@@ -197,6 +198,14 @@ final class PlayerService: ObservableObject {
     private var itemStatusObservation: NSKeyValueObservation?
     private var resolveGeneration = 0
     private var consecutiveFailures = 0
+    /// Why the last playback URL request failed, when it failed in transit
+    /// or the service refused it, rather than answering with no URL. Named
+    /// in the 无法播放 toast, as on macOS (#209).
+    private var lastResolveFailure: String?
+    /// The code the service answered with when it gave no URL, named only
+    /// when the song itself shows no reason it can't be played.
+    private var lastRefusalCode: Int?
+    private static let resolveLog = Logger(subsystem: "sb.moe.kumone", category: "playback")
     private var attemptedUnblockSources: Set<AudioSourceID> = []
     private var currentUnblockSourceID: AudioSourceID?
     /// The resolve generation that already spent its one reload after a
@@ -712,6 +721,13 @@ final class PlayerService: ObservableObject {
         pendingAudioResourceLoader?.cancel()
         pendingAudioResourceLoader = nil
         scrobbleIfNeeded(completed: false)
+        // Silence the outgoing song now rather than when the next one is
+        // ready: resolving its URL can take seconds, and meanwhile the old
+        // item would keep playing under the new song's title and lyrics.
+        if engine.currentItem != nil {
+            engine.replaceCurrentItem(with: nil)
+            releaseCurrentPlaybackResources()
+        }
         currentTrack = track
         playbackAccountID = AccountStore.shared.profile?.userId
         progress = resumeAt
@@ -773,6 +789,8 @@ final class PlayerService: ObservableObject {
         let quality = SettingsManager.shared.audioQuality.rawValue
         let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
         let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
+        lastResolveFailure = nil
+        lastRefusalCode = nil
 
         // A downloaded copy beats the network, and is all there is without one.
         if !skipsLocalCopies, let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
@@ -834,6 +852,10 @@ final class PlayerService: ObservableObject {
             }
         } catch {
             guard generation == resolveGeneration else { return }
+            if !(error is CancellationError) {
+                lastResolveFailure = error.localizedDescription
+                Self.resolveLog.error("Playback URL for \(track.id) failed: \(String(describing: error))")
+            }
             // A download covers a request that died on the network. Anything
             // else goes on below: a cached copy, then third-party sources.
             if ConnectivityFailure.matches(error) {
@@ -855,6 +877,8 @@ final class PlayerService: ObservableObject {
         var resolvedURL: URL?
         if let urlString = data?.url {
             resolvedURL = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
+        } else if let code = data?.code, code != 200 {
+            lastRefusalCode = code
         }
 
         // The service refused, or offers only a trial: a copy already cached,
@@ -943,9 +967,11 @@ final class PlayerService: ObservableObject {
 
     private func handleUnplayable(_ track: Track) {
         consecutiveFailures += 1
-        let reason = track.playability(privilege: nil,
-                                       isLoggedIn: AccountStore.shared.isLoggedIn,
-                                       vipType: AccountStore.shared.vipType).reason
+        let reason = lastResolveFailure
+            ?? track.playability(privilege: nil,
+                                 isLoggedIn: AccountStore.shared.isLoggedIn,
+                                 vipType: AccountStore.shared.vipType).reason
+            ?? lastRefusalCode.map { String(localized: "网易云未给出播放地址（\($0)）") }
         ToastCenter.shared.show(String(localized: "《\(track.name)》无法播放\(reason.map { "：\($0)" } ?? "")"))
         guard isPlaying else {
             engine.replaceCurrentItem(with: nil)
@@ -1700,6 +1726,12 @@ final class PlayerService: ObservableObject {
                 try session.validate()
                 applyPlaybackSession(session)
                 NowPlayingManager.shared.updateMetadata(for: session.currentTrack, duration: duration)
+                // Nothing plays until the user resumes, so load the lyrics
+                // now or the now-playing page waits on them until then.
+                let generation = resolveGeneration
+                Task {
+                    await loadLyrics(for: session.currentTrack, generation: generation)
+                }
             } catch { ToastCenter.shared.show(error.localizedDescription) }
             return
         }

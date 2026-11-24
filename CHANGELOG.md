@@ -7,6 +7,84 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.38 - 2026-11-22
+
+### Added
+
+- **macOS**: an Add to Playlist button next to the heart in the player bar saves the playing song to one of your playlists in one click (#232, thanks @WillowBranch127).
+- **iOS**: a Swipe Left from Lyrics for Comments switch in Settings turns the swipe off for anyone who triggers it by accident; View Comments stays in the now-playing menu (#225).
+
+### Fixed
+
+- **iOS**: skipping to another song now stops the previous one straight away, instead of letting it play on for a few seconds under the new song's title and lyrics (#221).
+- **Now playing**: after a relaunch, the restored song's lyrics load right away instead of spinning until you press play (#219).
+- **macOS 26**: with Liquid Glass, the page no longer covers part of the floating sidebar; a gap now runs between them, also with the window inactive (#229).
+- **macOS**: opening Roam with a song loaded no longer pushes the sidebar up under the window buttons (#227).
+- **macOS**: dragging the desktop lyrics no longer brings a minimized or hidden main window back to the front (#187).
+- **Comments**: shared comment pictures no longer have a thin white line along the bottom.
+
+---
+
+### 新增
+
+- **macOS**：播放条爱心旁新增「收藏到歌单」按钮，一键把正在播放的歌收藏到歌单（#232，感谢 @WillowBranch127）。
+- **iOS**：设置中新增「左滑歌词查看评论」开关，容易误触的话可以关掉；关掉后播放页菜单中的「查看评论」仍然可用（#225）。
+
+### 修复
+
+- **iOS**：切歌时会立刻停掉上一首，不会再在新歌的歌名和歌词下继续播放上一首几秒（#221）。
+- **播放页**：重新打开应用后，恢复的歌曲会直接加载歌词，不用等按下播放才出来（#219）。
+- **macOS 26**：开启液态玻璃时，主界面不会再盖住悬浮侧边栏的一部分，两者之间留出间距，窗口失去焦点时也一样（#229）。
+- **macOS**：有歌曲时打开「漫游」，侧边栏不会再被顶到窗口按钮下面（#227）。
+- **macOS**：拖动桌面歌词时，不会再把已最小化或隐藏的主窗口带回前台（#187）。
+- **评论**：分享的评论图片底部不会再有一条细白线。
+
+## 0.3.37 - 2026-11-14
+
+![分享评论 · Share a comment](https://raw.githubusercontent.com/missuo/kumone/v0.3.37/docs/releases/0.3.37-comment-share.png)
+
+![macOS 播放页评论 · Comments on the macOS now-playing page](https://raw.githubusercontent.com/missuo/kumone/v0.3.37/docs/releases/0.3.37-macos-comments.png)
+
+### Added
+
+- **Comments**: long-press a comment (right-click on macOS) to share it as a picture — the comment and who wrote it, with the song's title, artist and cover, over the cover's colours — then share it or save it to Photos (copy it on macOS). Copy Comment copies its text.
+- **Comments**: on macOS (and iPad), a Lyrics | Comments switch above the now-playing lyrics shows the playing song's comments in their place; songs without lyrics but with comments now get the column too.
+
+### Fixed
+
+- **iOS 17**: tapping the mini player no longer freezes the app with the now-playing page never appearing; the cause has been found and fixed. Swiping from the lyrics to the comments is back on iOS 16/17 (#213).
+- **Now playing**: on iPhone, the volume panel now closes when you tap anywhere else on the page, not only the speaker button again.
+
+---
+
+### 新增
+
+- **评论**：长按一条评论（macOS 上右键）即可把它分享成一张图片：评论内容和评论者，配上歌名、歌手和专辑封面，底色取自封面；可以直接分享或保存到相册（macOS 上为拷贝图片）。「复制评论」可复制评论文字。
+- **评论**：macOS（以及 iPad）播放页的歌词上方新增「歌词 | 评论」切换，可在歌词的位置查看正在播放歌曲的评论；没有歌词但有评论的歌曲也会显示这一栏。
+
+### 修复
+
+- **iOS 17**：点击迷你播放条后应用卡死、播放页一直出不来的问题已找到原因并修复；iOS 16/17 上也恢复了歌词左滑查看评论（#213）。
+- **播放页**：iPhone 上打开音量面板后，点页面其他任意位置即可关闭，不必再点一次喇叭按钮。
+
+## 0.3.36 - 2026-11-14
+
+### Fixed
+
+- **Third-party sources**: for songs Kuwo won't serve, its 11-second clip suggesting Kuwo Music is no longer played as the song; the next source is tried instead, and copies of the clip already in the cache are removed (#212).
+- **iOS 16/17**: opening the now-playing page from the mini player no longer freezes the app on iOS 17. These systems show the lyrics alone; the song's comments stay in its More menu (#213).
+- **Comments**: the comments beside the iPhone lyrics no longer keep spinning after a load is interrupted; they load again on their own (#214).
+- **iOS**: "Unable to play" now says why — the request that failed, or the code the service answered with when it gave no playback address (#209).
+
+---
+
+### 修复
+
+- **第三方音源**：酷我不给播放的歌，它返回的「建议去酷我音乐收听」的 11 秒提示音不再被当成歌曲播放，会改为尝试下一个音源，已经缓存的这段提示音也会被清掉（#212）。
+- **iOS 16/17**：在 iOS 17 上从迷你播放条打开播放页不会再卡死。这两个系统上播放页只显示歌词，评论仍可在歌曲的「更多」菜单中查看（#213）。
+- **评论**：iPhone 歌词旁的评论在加载被打断后不会再一直转圈，会自动重新加载（#214）。
+- **iOS**：「无法播放」提示现在会写明原因：请求失败的原因，或网易云没给播放地址时返回的代码（#209）。
+
 ## 0.3.35 - 2026-11-13
 
 ### Added

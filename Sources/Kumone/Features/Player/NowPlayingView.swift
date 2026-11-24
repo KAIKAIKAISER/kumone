@@ -44,8 +44,13 @@ struct NowPlayingView: View {
     @State private var selectedArtist: ArtistRef?
     @State private var selectedAlbum: AlbumSelection?
     @State private var showQueueOnMobile = false
+    /// Lyrics or comments in the regular page's right column (macOS, iPad).
+    @State private var regularColumnPage = RegularColumnPage.lyrics
     #if os(iOS)
     @State private var showSoundEffects = false
+    /// Held here rather than by the controls so the panel can sit above the
+    /// whole page, with a catcher that closes it on a tap anywhere else.
+    @State private var showsVolumeControl = false
     #endif
 
     var body: some View {
@@ -72,6 +77,11 @@ struct NowPlayingView: View {
             // Pin to the screen width so an intrinsically-wide child can never
             // stretch the ZStack and push the corner overlays off-screen.
             .frame(width: geo.size.width)
+            #if os(iOS)
+            .overlayPreferenceValue(CompactVolumeButtonAnchorKey.self) { anchor in
+                volumeLayer(buttonAnchor: anchor)
+            }
+            #endif
             #if os(macOS)
             .overlay(alignment: .topTrailing) {
                 // Toward the top-trailing corner, level with the window
@@ -359,12 +369,12 @@ struct NowPlayingView: View {
         // `.infinity` across an ultra-wide display (iPad landscape, ~1368pt)
         // left the left column's content floating in an oversized half and a
         // wide blank gutter on the right (#62).
-        let maxBandWidth: CGFloat = hasLyricsColumn ? 1040 : 560
+        let maxBandWidth: CGFloat = hasRegularRightColumn ? 1040 : 560
         return HStack(spacing: 0) {
             leftColumn(artworkSize: artworkSize)
                 .frame(maxWidth: .infinity)
-            if hasLyricsColumn {
-                lyricsColumn
+            if hasRegularRightColumn {
+                regularRightColumn
                     .frame(maxWidth: .infinity)
             }
         }
@@ -842,11 +852,49 @@ struct NowPlayingView: View {
         }
     }
 
+    /// The volume panel, above the button that opened it, over a clear
+    /// catcher that covers the page: a tap anywhere else only closes it.
+    @ViewBuilder
+    private func volumeLayer(buttonAnchor: Anchor<CGRect>?) -> some View {
+        if let buttonAnchor {
+            GeometryReader { proxy in
+                let button = proxy[buttonAnchor]
+                ZStack(alignment: .topLeading) {
+                    if showsVolumeControl {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .ignoresSafeArea()
+                            .onTapGesture(perform: closeVolumeControl)
+                            .accessibilityHidden(true)
+                    }
+
+                    Color.clear
+                        .frame(width: button.width, height: button.height)
+                        .overlay(alignment: .bottom) {
+                            if showsVolumeControl {
+                                CompactVolumePopover()
+                                    .offset(y: -button.height)
+                                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+                            }
+                        }
+                        .position(x: button.midX, y: button.midY)
+                }
+            }
+        }
+    }
+
+    private func closeVolumeControl() {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+            showsVolumeControl = false
+        }
+    }
+
     private var immersiveControls: some View {
         VStack(spacing: 17) {
             NowPlayingScrubber()
             CompactTransportControls()
             CompactSecondaryControls(
+                showsVolumeControl: $showsVolumeControl,
                 showsLyrics: showLyricsOnMobile,
                 showsQueue: showQueueOnMobile,
                 onToggleLyrics: toggleImmersiveLyrics,
@@ -1389,6 +1437,50 @@ struct NowPlayingView: View {
     @ViewBuilder
     private var lyricsColumn: some View {
         lyricsScroll(topInset: 200, bottomInset: 240, horizontalPadding: 24)
+    }
+
+    // MARK: - Regular right column
+
+    /// The song's comments sit beside its lyrics, one switch away, so a song
+    /// without lyrics still has a right column when it has comments.
+    private var hasRegularRightColumn: Bool {
+        hasLyricsColumn || commentsTrack != nil
+    }
+
+    private var commentsTrack: Track? {
+        guard let track = player.currentTrack,
+              SongCommentsMenuButton.isAvailable(for: track) else { return nil }
+        return track
+    }
+
+    private var regularRightColumn: some View {
+        ZStack(alignment: .top) {
+            Group {
+                if regularColumnPage == .comments, let track = commentsTrack {
+                    RegularCommentsPanel(track: track)
+                        .id(track.id)
+                        .padding(.top, 52)
+                        .transition(.opacity)
+                } else if hasLyricsColumn {
+                    lyricsColumn
+                        .transition(.opacity)
+                } else {
+                    Text("暂无歌词")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if commentsTrack != nil {
+                RegularColumnSwitch(selection: $regularColumnPage)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: regularColumnPage)
     }
 
     /// The scrolling lyric list shared by the regular page and the
@@ -2001,7 +2093,89 @@ private struct CompactTransportControls: View {
 }
 
 #if os(iOS)
+private struct CompactVolumePopover: View {
+    @EnvironmentObject private var player: PlayerService
+    @State private var isDragging = false
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "speaker.wave.3.fill")
+                .font(.system(size: 16, weight: .medium))
+
+            GeometryReader { geo in
+                let height = geo.size.height
+                let fraction = min(max(CGFloat(player.volume), 0), 1)
+                ZStack(alignment: .bottom) {
+                    Capsule().fill(.white.opacity(0.22))
+                    Capsule().fill(.white.opacity(0.82))
+                        .frame(height: height * fraction)
+                }
+                .frame(width: isDragging ? 12 : 8)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            isDragging = true
+                            updateVolume(at: value.location.y, height: height)
+                        }
+                        .onEnded { value in
+                            updateVolume(at: value.location.y, height: height)
+                            isDragging = false
+                        }
+                )
+                .animation(.spring(response: 0.24, dampingFraction: 0.82), value: isDragging)
+            }
+            .frame(width: 32, height: 132)
+            .accessibilityElement()
+            .accessibilityLabel("音量")
+            .accessibilityValue("\(Int((player.volume * 100).rounded()))%")
+            .accessibilityAdjustableAction(adjustVolume)
+
+            Image(systemName: player.volume == 0 ? "speaker.slash.fill" : "speaker.fill")
+                .font(.system(size: 14, weight: .medium))
+        }
+        .foregroundStyle(.white.opacity(0.85))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(alignment: .bottom) {
+            Triangle()
+                .fill(.white.opacity(0.18))
+                .frame(width: 16, height: 8)
+                .offset(y: 8)
+        }
+    }
+
+    private func updateVolume(at location: CGFloat, height: CGFloat) {
+        guard height > 0 else { return }
+        player.volume = Float(min(max(1 - location / height, 0), 1))
+    }
+
+    private func adjustVolume(_ direction: AccessibilityAdjustmentDirection) {
+        let step: Float = 0.05
+        switch direction {
+        case .increment:
+            player.volume = min(player.volume + step, 1)
+        case .decrement:
+            player.volume = max(player.volume - step, 0)
+        @unknown default:
+            break
+        }
+    }
+}
+
+private struct CompactVolumeButtonAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
 private struct CompactSecondaryControls: View {
+    @EnvironmentObject private var player: PlayerService
+    @Binding var showsVolumeControl: Bool
     let showsLyrics: Bool
     let showsQueue: Bool
     let onToggleLyrics: () -> Void
@@ -2027,11 +2201,31 @@ private struct CompactSecondaryControls: View {
             .frame(maxWidth: .infinity)
 
             secondaryButton(
+                icon: volumeIcon,
+                label: showsVolumeControl ? "关闭音量控制" : "显示音量控制",
+                isActive: showsVolumeControl
+            ) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    showsVolumeControl.toggle()
+                }
+            }
+            // The panel itself is drawn by the page (`volumeLayer`), above
+            // everything else, from this button's frame.
+            .anchorPreference(key: CompactVolumeButtonAnchorKey.self, value: .bounds) { $0 }
+
+            secondaryButton(
                 icon: "list.bullet",
                 label: showsQueue ? "关闭播放队列" : "显示播放队列",
                 isActive: showsQueue
             ) { onToggleQueue() }
         }
+    }
+
+    private var volumeIcon: String {
+        let volume = player.volume
+        if volume == 0 { return "speaker.slash" }
+        if volume < 0.5 { return "speaker.wave.1" }
+        return "speaker.wave.2"
     }
 
     private func secondaryButton(
